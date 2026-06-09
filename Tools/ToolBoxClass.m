@@ -167,9 +167,18 @@ methods (Access = private)
                 obj.fs = data.fs;
                 obj.f1 = data.frequencyRange1;
                 obj.f2 = data.frequencyRange2;
-                obj.record_time_stamps_us = data.record_time_stamps_us;
-                obj.holo_frames.first = data.first_frame;
-                obj.holo_frames.last = data.end_frame;
+
+                if isfield(data, 'record_time_stamps_us')
+                    obj.record_time_stamps_us = data.record_time_stamps_us;
+                end
+
+                if isfield(data, 'first_frame')
+                    obj.holo_frames.first = data.first_frame;
+                end
+
+                if isfield(data, 'end_frame')
+                    obj.holo_frames.last = data.end_frame;
+                end
             end
 
             return;
