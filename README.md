@@ -43,6 +43,16 @@ To install EyeFlow, follow these steps:
 - Wavelet Toolbox
 - Run Matlab, then in "Add-Ons/Explore Add-Ons": search and install the "Deep Learning Toolbox Converter for ONNX Model Format"
 
+## Pytorch models
+
+To use the best models, you must have Python (3.10 - 3.12) and Torch installed.
+Python : [Download](https://www.python.org/downloads/release/python-31213/)
+Pytorch : 
+```bash
+pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+```
+Make sure that the downloaded Python version is at the top of your user Path.
+
 ## Getting Started
 
 To get started with EyeFlow:

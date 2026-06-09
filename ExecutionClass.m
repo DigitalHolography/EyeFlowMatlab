@@ -6,6 +6,7 @@ properties
     % Basic Info
     path char
     directory char
+    originalParentPath char
     params_names cell
     param_name char
     filenames char
@@ -46,56 +47,68 @@ end
 
 methods
 
-    function obj = ExecutionClass(path)
-        % Constructor for the class, initializes all components
+    function obj = ExecutionClass(dataPath, originalPath)
+        % Constructor
+        %   dataPath   - folder containing raw data (may be resolved to *_HD)
+        %   originalPath - folder originally selected by user (for parameters)
+        if nargin < 2
+            originalPath = dataPath;
+        end
+
+        obj.originalParentPath = originalPath;
+        obj.path = originalPath; % for UI display
+
         tLoading = tic;
         fprintf("\n----------------------------------\n" + ...
             "Video Loading\n" + ...
         "----------------------------------\n");
 
-        % Initialize DataLoader first
-        DataLoader = DataLoaderClass(path);
+        % Load data using DataLoader (resolves subfolders automatically)
+        DataLoader = DataLoaderClass(dataPath);
 
-        % Copy data to ExecutionClass for backward compatibility
+        % Copy loaded data
         obj.directory = DataLoader.directory;
         obj.filenames = DataLoader.filenames;
-        obj.path = path;
-
-        % Copy data to ExecutionClass for backward compatibility
         obj.M0 = DataLoader.M0;
         obj.M1 = DataLoader.M1;
         obj.M2 = DataLoader.M2;
         obj.SH = DataLoader.SH;
         clear DataLoader;
 
-        % Load parameters
-        obj.params_names = checkEyeFlowParamsFromJson(obj.directory);
+        % Locate parameter JSON files – start from originalPath (user‑selected folder)
+        paramSearchDir = originalPath;
+
+        if ~isfolder(fullfile(paramSearchDir, 'eyeflow', 'json'))
+            % Fallback: try the parent of the data folder (if dataPath is a subfolder)
+            paramSearchDir = fileparts(dataPath);
+        end
+
+        obj.params_names = checkEyeFlowParamsFromJson(paramSearchDir);
+
+        if isempty(obj.params_names)
+            error('No JSON parameter file found in %s', paramSearchDir);
+        end
+
         obj.param_name = obj.params_names{1};
 
-        % Initialize Output and Cache
+        % Initialise output, cache, and analyser
         obj.Output = OutputClass();
         obj.Cache = CacheClass();
-
-        % Initialize Modules
         obj.Analyzer = AnalyzerClass(obj.Cache);
 
-        Parameters_json(path, obj.param_name);
+        % Load the actual parameters (creates global variable)
+        Parameters_json(paramSearchDir, obj.param_name);
 
-        fprintf("- Video Loading took : %ds\n", round(toc(tLoading)))
+        fprintf("- Video Loading took : %ds\n", round(toc(tLoading)));
     end
 
     function preprocessData(obj)
-
         PreProcessTimer = tic;
         fprintf("\n----------------------------------\nVideo PreProcessing\n----------------------------------\n");
 
-        % Delegate to Preprocessor
         Preprocessor = PreprocessorClass(obj.directory, obj.filenames, obj.param_name);
-
-        % Preprocessing
         Preprocessor.preprocess(obj);
 
-        % Copy results back for backward compatibility
         obj.Cache.firstFrameIdx = Preprocessor.firstFrameIdx;
         obj.Cache.lastFrameIdx = Preprocessor.lastFrameIdx;
         obj.Cache.M0_ff = Preprocessor.M0_ff;
@@ -105,22 +118,18 @@ methods
         obj.Cache.displacementField = Preprocessor.displacementField;
         obj.is_preprocessed = Preprocessor.is_preprocessed;
 
-        % Clear Preprocessor and intermediate variables
+        % Free memory
         obj.M0 = [];
         obj.M1 = [];
         obj.M2 = [];
         obj.SH = [];
         clear Preprocessor;
 
-        fprintf("- Preprocess took : %ds\n", round(toc(PreProcessTimer)))
-
+        fprintf("- Preprocess took : %ds\n", round(toc(PreProcessTimer)));
         fprintf("\n----------------------------------\nPreprocessing Complete\n----------------------------------\n");
     end
 
     function analyzeData(obj, app)
-        % Main analysis coordinator
-        % Initialize output system
-
         AnalyzerTimer = tic;
 
         ToolBox = obj.ToolBoxMaster;
@@ -141,12 +150,10 @@ methods
 
         obj.AINetworks.updateAINetworks(params);
 
-        % Execute eye side analysis if asked
         if params.json.Mask.EyeSideClassifierNet
             predictEyeSide(obj.AINetworks.EyeSideClassifierNet);
         end
 
-        % Execute analysis steps based on checkbox flags
         if obj.flag_segmentation
             obj.Analyzer.performSegmentation(obj, app);
         end
@@ -191,43 +198,7 @@ methods
             profile viewer
         end
 
-        fprintf("- Total Analysis took : %ds\n", round(toc(AnalyzerTimer)))
-
-    end
-
-    function checkData(obj)
-        % Visual check of loaded/preprocessed data
-        figure
-
-        if ~isempty(obj.Cache.M0_ff)
-            subplot(2, 2, 1)
-            imagesc(mean(obj.Cache.M0_ff, 3))
-            axis image off
-            subplot(2, 2, 2)
-            imagesc(mean(obj.Cache.f_AVG, 3))
-            axis image off
-            subplot(2, 2, 3)
-            imagesc(mean(obj.Cache.f_RMS, 3))
-            axis image off
-
-            if ~isempty(obj.Cache.displacementField)
-                subplot(2, 2, 4)
-                imagesc(sqrt(mean(obj.Cache.displacementField .^ 2, 4)))
-                axis image off
-            end
-
-        elseif ~isempty(obj.M0)
-            subplot(1, 3, 1)
-            imagesc(mean(obj.M0, 3))
-            axis image off
-            subplot(1, 3, 2)
-            imagesc(mean(obj.M1, 3))
-            axis image off
-            subplot(1, 3, 3)
-            imagesc(mean(obj.M2, 3))
-            axis image off
-        end
-
+        fprintf("- Total Analysis took : %ds\n", round(toc(AnalyzerTimer)));
     end
 
 end

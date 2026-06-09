@@ -4,12 +4,16 @@ classdef FolderManagementUI < handle
 %   FM = FolderManagementUI(APP) creates a non-modal figure that allows
 %   managing a list of EyeFlow measurement folders and running batch
 %   analysis.
+%
+%   The list contains **parent folders** (e.g. 'X:\Data\mouse123') that
+%   hold the '_HD' and '_EF' sub‑folders.
 
 properties (Access = private)
     MainApp % Reference to the main EyeFlow app
     TextArea % uitextarea displaying the folder list
     WorkerSpinner % uispinner for number of parallel workers
-    Figure % Allow reading from outside, but only class can set it
+    WorkersLabel % Label for the worker spinner
+    Figure % uifigure handle
 end
 
 methods
@@ -22,7 +26,6 @@ methods
 
         obj.MainApp = mainApp;
         obj.createUI();
-
         fontname(obj.Figure, 'Arial');
         fontsize(obj.Figure, 12, "points");
     end
@@ -41,19 +44,23 @@ methods (Access = private)
 
     function createUI(obj)
         app = obj.MainApp;
-
-        % Initial height based on number of folders
         nFolders = max(length(app.drawer_list), 1);
         initialHeight = 222 + nFolders * 18;
 
         % Position next to main app if possible
-        if isvalid(app.EyeFlowUIFigure)
-            mainPos = app.EyeFlowUIFigure.Position;
-            xPos = mainPos(1) + mainPos(3) + 20;
-            yPos = mainPos(2);
+        if ismethod(app, 'getMainFigure')
+            mainFig = app.getMainFigure();
+
+            if isvalid(mainFig)
+                mainPos = mainFig.Position;
+                xPos = mainPos(1) + mainPos(3) + 20;
+                yPos = mainPos(2);
+            else
+                xPos = 300; yPos = 300;
+            end
+
         else
-            xPos = 300;
-            yPos = 300;
+            xPos = 300; yPos = 300;
         end
 
         obj.Figure = uifigure('Position', [xPos, yPos, 650, initialHeight], ...
@@ -63,7 +70,7 @@ methods (Access = private)
             'WindowStyle', 'normal', ...
             'CloseRequestFcn', @(~, ~) obj.closeFigure());
 
-        % Main layout: text area (top) + button panel (bottom)
+        % Main grid: text area (top) + button panel (bottom)
         mainGrid = uigridlayout(obj.Figure, [2, 1], ...
             'ColumnWidth', {'1x'}, ...
             'RowHeight', {'1x', 'fit'}, ...
@@ -95,41 +102,56 @@ methods (Access = private)
         btnGrid.Layout.Row = 2;
         btnGrid.Layout.Column = 1;
 
-        % Spinner label and spinner – adjust layout: place them in row1, col1-2
-        uilabel(btnGrid, 'Text', 'Parallel workers:', ...
+        % Spinner label and spinner
+        obj.WorkersLabel = uilabel(btnGrid, 'Text', 'Parallel workers:', ...
             'FontColor', [1 1 1], ...
-            'HorizontalAlignment', 'left');
+            'HorizontalAlignment', 'right');
+        obj.WorkersLabel.Layout.Row = 1;
+        obj.WorkersLabel.Layout.Column = 2;
+
+        % The spinner allows selecting the number of parallel workers to use during rendering.
         obj.WorkerSpinner = uispinner(btnGrid, ...
             'Limits', [0, parcluster('local').NumWorkers], ...
             'Value', min(10, floor(parcluster('local').NumWorkers / 2)), ...
             'FontColor', [1 1 1], ...
             'BackgroundColor', [0.3 0.3 0.3]);
         obj.WorkerSpinner.Layout.Row = 1;
-        obj.WorkerSpinner.Layout.Column = 2;
+        obj.WorkerSpinner.Layout.Column = 3;
 
-        % Common button style
+        % Common button styles
         bkgColor = [0.5, 0.5, 0.5];
         fontColor = [1, 1, 1];
         renderColor = [0.2, 0.6, 0.2];
 
-        % Column 1
-        obj.makeButton(btnGrid, 2, 1, 'Select Folder', @(~, ~) obj.selectFolder(), bkgColor, fontColor);
-        obj.makeButton(btnGrid, 3, 1, 'Select Entire Session', @(~, ~) obj.selectEntireFolder(), bkgColor, fontColor);
-        obj.makeButton(btnGrid, 4, 1, 'Select Latest HD', @(~, ~) obj.selectLatestHDFolder(), bkgColor, fontColor);
-        obj.makeButton(btnGrid, 5, 1, 'Clear List', @(~, ~) obj.clearList(), bkgColor, fontColor);
+        % ---- Column 1 ----
+        obj.makeButton(btnGrid, 2, 2, 'Select HD folder', ...
+            @(~, ~) obj.selectFolder(), bkgColor, fontColor, ...
+        'Pick a single measurement folder (parent folder containing _HD and _EF)');
+        obj.makeButton(btnGrid, 3, 2, 'Select every HD folder', ...
+            @(~, ~) obj.selectAllFromSession(), bkgColor, fontColor, ...
+        'Scan a session folder and add all measurement folders (those having a _HD sub‑folder)');
+        obj.makeButton(btnGrid, 4, 2, 'Clear List', ...
+            @(~, ~) obj.clearList(), bkgColor, fontColor, 'Remove all entries');
 
-        % Column 2
-        obj.makeButton(btnGrid, 2, 2, 'Load from txt', @(~, ~) obj.loadFromTxt(), bkgColor, fontColor);
-        obj.makeButton(btnGrid, 3, 2, 'Save to txt', @(~, ~) obj.saveToTxt(), bkgColor, fontColor);
-        obj.makeButton(btnGrid, 4, 2, 'Clear Parameters', @(~, ~) obj.clearParameters(), bkgColor, fontColor);
-        obj.makeButton(btnGrid, 5, 2, 'Import Parameter', @(~, ~) obj.importParameter(), bkgColor, fontColor);
+        % ---- Column 2 ----
+        obj.makeButton(btnGrid, 1, 1, 'Load from txt', ...
+            @(~, ~) obj.loadFromTxt(), bkgColor, fontColor, 'Load folder paths from a text file');
+        obj.makeButton(btnGrid, 2, 1, 'Save to txt', ...
+            @(~, ~) obj.saveToTxt(), bkgColor, fontColor, 'Save current folder list to a text file');
+        obj.makeButton(btnGrid, 3, 1, 'Clear Parameters', ...
+            @(~, ~) obj.clearParameters(), bkgColor, fontColor, 'Delete all JSON param files from listed folders');
+        obj.makeButton(btnGrid, 4, 1, 'Import Parameter', ...
+            @(~, ~) obj.importParameter(), bkgColor, fontColor, 'Copy a JSON parameter file to every listed folder');
 
-        % Column 3
-        obj.makeButton(btnGrid, 2, 3, 'RENDER', @(~, ~) obj.render(), renderColor, fontColor);
-        obj.makeButton(btnGrid, 3, 3, 'Show Results', @(~, ~) obj.showResults(), bkgColor, fontColor);
+        % ---- Column 3 ----
+        obj.makeButton(btnGrid, 2, 3, 'Render', ...
+            @(~, ~) obj.render(), renderColor, fontColor, 'Run EyeFlow analysis on all listed folders');
+        obj.makeButton(btnGrid, 3, 3, 'Show Results', ...
+            @(~, ~) obj.showResults(), bkgColor, fontColor, 'Generate combined report for all listed folders');
     end
 
-    function btn = makeButton(~, parent, row, col, label, cb, bgColor, fontColor)
+    function btn = makeButton(~, parent, row, col, label, cb, bgColor, fontColor, tooltip)
+        % Helper to create a push button with optional tooltip
         btn = uibutton(parent, 'push', ...
             'BackgroundColor', bgColor, ...
             'FontColor', fontColor, ...
@@ -137,6 +159,11 @@ methods (Access = private)
             'ButtonPushedFcn', cb);
         btn.Layout.Row = row;
         btn.Layout.Column = col;
+
+        if nargin > 7
+            btn.Tooltip = tooltip;
+        end
+
     end
 
     function updateDisplay(obj)
@@ -148,65 +175,119 @@ methods (Access = private)
             obj.TextArea.Value = app.drawer_list;
         end
 
-        % Adjust figure height
         n = max(length(app.drawer_list), 1);
-        newHeight = 222 + n * 18;
-        obj.Figure.Position(4) = newHeight;
+        obj.Figure.Position(4) = 222 + n * 18;
     end
 
     function closeFigure(obj)
         delete(obj.Figure);
-        delete(obj); % object destroyed
+        delete(obj);
     end
 
-    % -----------------------------------------------------------------
-    % Callbacks
-    % -----------------------------------------------------------------
+    % ---------------------------------------------------------------------
+    % Callback methods
+    % ---------------------------------------------------------------------
+
     function selectFolder(obj)
+        % Unified selection: pick a folder or a .holo file.
+        % Always adds the corresponding _HD folder to the list.
         app = obj.MainApp;
+        startPath = pwd;
 
         if ~isempty(app.drawer_list)
             startPath = app.drawer_list{end};
-        else
-            startPath = pwd;
         end
 
-        selPath = uigetdir(startPath, 'Select a measurement folder');
-        if selPath == 0, return; end
-        app.drawer_list{end + 1} = selPath;
+        % --- Try folder selection first ---
+        selPath = uigetdir(startPath, 'Select a measurement folder or cancel to pick a .holo file');
+
+        if selPath == 0
+            % User cancelled folder selection → try file selection
+            [file, fpath] = uigetfile('*.holo', 'Select a .holo file', startPath);
+
+            if isequal(file, 0)
+                return; % user cancelled both
+            end
+
+            selPath = fullfile(fpath, file); % full path to the .holo file
+        end
+
+        % --- Resolve the _HD folder from the selected path ---
+        hdFolder = obj.resolveHDFolder(selPath);
+
+        if isempty(hdFolder)
+            uialert(obj.Figure, 'No corresponding _HD folder found.', 'Invalid Selection');
+            return;
+        end
+
+        app.drawer_list{end + 1} = hdFolder;
+        fprintf('Added HD folder: %s\n', hdFolder);
         obj.updateDisplay();
     end
 
-    function selectEntireFolder(obj)
+    function hdPath = resolveHDFolder(~, selectedPath)
+        % Given a folder or .holo file, return the _HD subfolder path.
+        % Returns empty if no appropriate _HD folder can be found.
+        hdPath = '';
+
+        if isfolder(selectedPath)
+            % If it's already an _HD folder, use it directly
+            [~, fname] = fileparts(selectedPath);
+
+            if endsWith(fname, '_HD')
+                hdPath = selectedPath;
+            else
+                % Assume it's the parent folder; look for fname_HD inside
+                candidate = fullfile(selectedPath, [fname, '_HD']);
+
+                if isfolder(candidate)
+                    hdPath = candidate;
+                end
+
+            end
+
+        elseif isfile(selectedPath)
+            % It's a .holo file; look in its parent folder for <basename>_HD
+            [pDir, fname] = fileparts(selectedPath);
+            candidate = fullfile(pDir, [fname, '_HD']);
+
+            if isfolder(candidate)
+                hdPath = candidate;
+            end
+
+        end
+
+    end
+
+    function selectAllFromSession(obj)
+        % Pick a super‑folder and add every X_HD sub‑folder that exists inside a child X.
         app = obj.MainApp;
+        startPath = pwd;
 
         if ~isempty(app.drawer_list)
             startPath = app.drawer_list{end};
-        else
-            startPath = pwd;
         end
 
-        sessionPath = uigetdir(startPath, 'Select the session (parent) folder');
-        if sessionPath == 0, return; end
+        superFolder = uigetdir(startPath, 'Select the super‑folder (parent of measurement folders)');
+        if superFolder == 0, return; end
 
-        % List all subfolders
-        d = dir(sessionPath);
-        d = d([d.isdir]);
-        d = d(~ismember({d.name}, {'.', '..'}));
+        d = dir(superFolder);
+        d = d([d.isdir] & ~ismember({d.name}, {'.', '..'}));
 
         added = 0;
 
         for i = 1:length(d)
-            folderName = d(i).name;
-            % Keep only folders containing '_HD_' or '_HW_' (your naming convention)
-            if contains(folderName, '_HD_') || contains(folderName, '_HW_')
-                app.drawer_list{end + 1} = fullfile(sessionPath, folderName);
+            folderName = d(i).name; % e.g. '260113_FIY0713_3'
+            hdCandidate = fullfile(superFolder, folderName, [folderName, '_HD']);
+
+            if isfolder(hdCandidate)
+                app.drawer_list{end + 1} = hdCandidate; % <-- add the _HD folder itself
                 added = added + 1;
             end
 
         end
 
-        fprintf('Added %d measurement folders from session.\n', added);
+        fprintf('Added %d HD folder(s) from "%s".\n', added, superFolder);
         obj.updateDisplay();
     end
 
@@ -222,9 +303,10 @@ methods (Access = private)
         lines = readlines(fullfile(path, file));
 
         for i = 1:numel(lines)
+            candidate = strtrim(char(lines(i)));
 
-            if ~isempty(lines(i)) && isfolder(lines(i))
-                app.drawer_list{end + 1} = char(lines(i));
+            if ~isempty(candidate) && isfolder(candidate)
+                app.drawer_list{end + 1} = candidate;
             end
 
         end
@@ -328,23 +410,20 @@ methods (Access = private)
             return;
         end
 
-        % Save current app state (checkboxes, etc.)
-        savedSeg = app.segmentationCheckBox.Value;
-        savedBFA = app.bloodFlowAnalysisCheckBox.Value;
-        savedPWV = app.pulseVelocityCheckBox.Value;
-        savedCSA = app.generateCrossSectionSignalsCheckBox.Value;
-        savedExp = app.exportCrossSectionResultsCheckBox.Value;
-        savedSpec = app.spectralAnalysisCheckBox.Value;
+        % Save current UI state
+        savedSeg = app.getWidgetValue('segmentationCheckBox');
+        savedBFA = app.getWidgetValue('bloodFlowAnalysisCheckBox');
+        savedPWV = app.getWidgetValue('pulseVelocityCheckBox');
+        savedCSA = app.getWidgetValue('generateCrossSectionSignalsCheckBox');
+        savedExp = app.getWidgetValue('exportCrossSectionResultsCheckBox');
+        savedSpec = app.getWidgetValue('spectralAnalysisCheckBox');
 
-        % Set parallel workers from spinner
-        nWorkers = obj.WorkerSpinner.Value;
-        app.NumberofWorkersSpinner.Value = nWorkers;
+        % Apply workers
+        app.setWidgetValue('NumberofWorkersSpinner', obj.WorkerSpinner.Value);
 
+        fprintf('\n========== BATCH PROCESSING STARTED ==========\n');
         errors = cell(numel(folders), 1);
         errFolders = cell(numel(folders), 1);
-
-        % Create a waitbar or just use command window output
-        fprintf('\n========== BATCH PROCESSING STARTED ==========\n');
 
         for i = 1:length(folders)
             folder = folders{i};
@@ -353,7 +432,7 @@ methods (Access = private)
 
             try
                 app.Load(folder);
-                err = app.ExecuteButtonPushed(); % This returns any error that occurred
+                err = app.ExecuteButtonPushed();
 
                 if ~isempty(err)
                     errors{i} = err;
@@ -370,17 +449,14 @@ methods (Access = private)
         end
 
         % Restore checkboxes
-        app.segmentationCheckBox.Value = savedSeg;
-        app.bloodFlowAnalysisCheckBox.Value = savedBFA;
-        app.pulseVelocityCheckBox.Value = savedPWV;
-        app.generateCrossSectionSignalsCheckBox.Value = savedCSA;
-        app.exportCrossSectionResultsCheckBox.Value = savedExp;
-        app.spectralAnalysisCheckBox.Value = savedSpec;
+        app.setWidgetValue('segmentationCheckBox', savedSeg);
+        app.setWidgetValue('bloodFlowAnalysisCheckBox', savedBFA);
+        app.setWidgetValue('pulseVelocityCheckBox', savedPWV);
+        app.setWidgetValue('generateCrossSectionSignalsCheckBox', savedCSA);
+        app.setWidgetValue('exportCrossSectionResultsCheckBox', savedExp);
+        app.setWidgetValue('spectralAnalysisCheckBox', savedSpec);
 
-        % Summary
         fprintf('\n========== BATCH PROCESSING COMPLETED ==========\n');
-
-        % Find indices of cells that actually contain an error (non-empty)
         errorIndices = find(~cellfun(@isempty, errors));
 
         if isempty(errorIndices)
@@ -390,22 +466,12 @@ methods (Access = private)
 
             for e = 1:length(errorIndices)
                 idx = errorIndices(e);
-                errVal = errors{idx};
-                folderName = errFolders{idx};
+                fprintf(2, '  [%d] %s\n', idx, errFolders{idx});
 
-                if isempty(folderName)
-                    folderName = '<unknown folder>';
-                end
-
-                fprintf(2, '  [%d] %s\n', idx, folderName);
-
-                % Handle different error types safely
-                if isa(errVal, 'MException')
-                    fprintf(2, '      %s\n', errVal.message);
-                elseif ischar(errVal) || isstring(errVal)
-                    fprintf(2, '      %s\n', char(errVal));
-                else
-                    fprintf(2, '      (Non‑standard error object)\n');
+                if isa(errors{idx}, 'MException')
+                    fprintf(2, '      %s\n', errors{idx}.message);
+                elseif ischar(errors{idx}) || isstring(errors{idx})
+                    fprintf(2, '      %s\n', char(errors{idx}));
                 end
 
             end
@@ -422,7 +488,6 @@ methods (Access = private)
             return;
         end
 
-        % Create an output directory inside the first folder (or ask user)
         outDir = fullfile(app.drawer_list{1}, 'Multiple_Results');
 
         if ~isfolder(outDir)
@@ -430,7 +495,7 @@ methods (Access = private)
         end
 
         fprintf('Generating multi-folder report in: %s\n', outDir);
-        % Call your existing ShowOutputs function (must be on path)
+
         try
             ShowOutputs(app.drawer_list, outDir);
             fprintf('Report generation complete.\n');
@@ -438,66 +503,6 @@ methods (Access = private)
             uialert(obj.Figure, sprintf('Error generating report:\n%s', ME.message), 'Report Error');
         end
 
-    end
-
-    function selectLatestHDFolder(obj)
-        app = obj.MainApp;
-
-        if ~isempty(app.drawer_list)
-            startPath = app.drawer_list{end};
-        else
-            startPath = pwd;
-        end
-
-        sessionPath = uigetdir(startPath, 'Select the session (parent) folder');
-
-        if sessionPath == 0
-            return;
-        end
-
-        % Get all subfolders
-        d = dir(sessionPath);
-        d = d([d.isdir]);
-        d = d(~ismember({d.name}, {'.', '..'}));
-
-        % Map: baseName -> {maxNum, fullPath}
-        latestMap = containers.Map('KeyType', 'char', 'ValueType', 'any');
-
-        for i = 1:length(d)
-            name = d(i).name;
-            % Look for pattern: <base>_HD_<number>
-            tokens = regexp(name, '^(.*)_HD_(\d+)$', 'tokens');
-
-            if ~isempty(tokens)
-                base = tokens{1}{1};
-                num = str2double(tokens{1}{2});
-                fullPath = fullfile(sessionPath, name);
-
-                if ~isKey(latestMap, base) || num > latestMap(base).num
-                    latestMap(base) = struct('num', num, 'path', fullPath);
-                end
-
-            end
-
-        end
-
-        if isempty(latestMap)
-            uialert(obj.Figure, 'No folders matching *_HD_<number> found.', 'No HD Folders');
-            return;
-        end
-
-        % Add each latest folder to the list
-        keys = latestMap.keys;
-        added = 0;
-
-        for k = 1:length(keys)
-            app.drawer_list{end + 1} = latestMap(keys{k}).path;
-            added = added + 1;
-            fprintf('Added latest HD folder: %s (suffix %d)\n', latestMap(keys{k}).path, latestMap(keys{k}).num);
-        end
-
-        fprintf('Added %d latest HD folders from session.\n', added);
-        obj.updateDisplay();
     end
 
 end

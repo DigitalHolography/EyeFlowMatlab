@@ -179,10 +179,10 @@ end
 
 % --- SETUP PARPOOL ---
 % maxWorkers = parcluster("local").NumWorkers;
-
+%
 % params_names = checkEyeFlowParamsFromJson(rawInputs(1)); % checks compatibility between found EF params and Default EF params of this version of EF.
 % params = Parameters_json(rawInputs(1), params_names{1});
-
+%
 % if params.json.NumberOfWorkers > 0 && params.json.NumberOfWorkers < maxWorkers
 %     fprintf("Using nb of workers stored inside the parameters.json (%i)", params.json.NumberOfWorkers);
 %     setupParpool(params.json.NumberOfWorkers);
@@ -220,11 +220,11 @@ try
     ExecClass.preprocessData();
 
     ExecClass.flag_segmentation = 1;
-    ExecClass.flag_spectral_analysis = 1;
+    ExecClass.flag_spectral_analysis = 0;
     ExecClass.flag_bloodFlowVelocity_analysis = 1;
-    ExecClass.flag_pulseWaveVelocity = 1;
-    ExecClass.flag_crossSection_analysis = 1;
-    ExecClass.flag_crossSection_export = 1;
+    ExecClass.flag_pulseWaveVelocity = 0;
+    ExecClass.flag_crossSection_analysis = 0;
+    ExecClass.flag_crossSection_export = 0;
 
     ExecClass.analyzeData([]);
 catch e

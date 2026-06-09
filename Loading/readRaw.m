@@ -45,12 +45,12 @@ catch ME
 end
 
 % Read raw moment files
-dir_path_raw = fullfile(obj.directory, 'raw');
+dir_path_h5 = fullfile(obj.directory, 'h5');
 moment_files = {'_moment0', '_moment1', '_moment2'};
 output_fields = {'M0', 'M1', 'M2'};
 
 for i = 1:length(moment_files)
-    raw_file = fullfile(dir_path_raw, [obj.filenames, moment_files{i}, '.raw']);
+    raw_file = fullfile(dir_path_h5, [obj.filenames, moment_files{i}, '.raw']);
 
     if ~isfile(raw_file)
         error('Raw moment file not found: %s', raw_file);
@@ -82,7 +82,7 @@ for i = 1:length(moment_files)
 end
 
 % Import SH data if available
-sh_file = fullfile(dir_path_raw, [obj.filenames, '_SH.raw']);
+sh_file = fullfile(dir_path_h5, [obj.filenames, '_SH.raw']);
 
 if isfile(sh_file)
     fprintf('- Reading SH data: %s\n', sh_file);

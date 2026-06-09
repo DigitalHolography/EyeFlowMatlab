@@ -62,11 +62,11 @@ M0_ff = flat_field_correction_ef(M0, ceil(gwRatio * numX), border);
 % % Expand mu and sigma to match video size
 % mu = repmat(mu, numX, numY, numFrames);
 % sigma = repmat(sigma, numX, numY, numFrames);
-% 
+%
 % % Clip extreme values to ±3σ
 % M0_ff(M0_ff > mu + 3 * sigma) = mu(M0_ff > mu + 3 * sigma) + 3 * sigma(M0_ff > mu + 3 * sigma);
 % M0_ff(M0_ff < mu - 3 * sigma) = mu(M0_ff < mu - 3 * sigma) - 3 * sigma(M0_ff < mu - 3 * sigma);
-% 
+%
 obj.M0_ff = M0_ff;
 
 end

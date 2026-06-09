@@ -18,7 +18,7 @@ ToolBox = getGlobalToolBox;
 params = ToolBox.getParams;
 saveFigures = params.saveFigures;
 exportVideos = params.exportVideos;
-path = ToolBox.path_main;
+path = ToolBox.EF_path;
 folder_steps = fullfile('mask', 'steps');
 
 % 0) Initialisation

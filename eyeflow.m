@@ -1,7 +1,7 @@
 classdef eyeflow < matlab.apps.AppBase
 
-% Properties that correspond to app components
-properties (Access = public)
+% Properties that correspond to app components – now PRIVATE
+properties (Access = private)
     EyeFlowUIFigure matlab.ui.Figure
     RootGrid matlab.ui.container.GridLayout
 
@@ -36,8 +36,10 @@ properties (Access = public)
     NumberofWorkersSpinnerLabel matlab.ui.control.Label
     ExecuteButton matlab.ui.control.Button
     ImageDisplay matlab.ui.control.Image
+end
 
-    % Files
+% Public data (kept as originally)
+properties (Access = public)
     file ExecutionClass
     AINetworks
     drawer_list = {}
@@ -45,29 +47,113 @@ end
 
 methods (Access = public)
 
+    % Set the ImageDisplay image source with the same pre‑processing as Load()
+    function setDisplayImage(app, imageMatrix)
+
+        if ndims(imageMatrix) == 3
+            grayImg = mean(imageMatrix, 3);
+        else
+            grayImg = imageMatrix;
+        end
+
+        rgbImg = repmat(rescale(grayImg), [1 1 3]);
+        [numX, numY] = size(rgbImg);
+        app.ImageDisplay.ImageSource = imresize(rgbImg, [max(numX, numY) max(numX, numY)]);
+    end
+
+    function fig = getMainFigure(app)
+        fig = app.EyeFlowUIFigure;
+    end
+
+    function value = getWidgetValue(app, widgetName)
+        w = app.(widgetName);
+
+        if isempty(w)
+            value = [];
+        elseif isa(w, 'matlab.ui.control.CheckBox')
+            value = logical(w.Value);
+        elseif isa(w, 'matlab.ui.control.DropDown')
+            value = w.Value;
+        elseif isa(w, 'matlab.ui.control.ListBox')
+            value = w.Value;
+        elseif isa(w, 'matlab.ui.control.NumericEditField') || isa(w, 'matlab.ui.control.Spinner')
+            value = double(w.Value);
+        else
+            value = w.Value;
+        end
+
+    end
+
+    function setWidgetValue(app, widgetName, value)
+        w = app.(widgetName);
+        if isempty(w), return; end
+
+        if isa(w, 'matlab.ui.control.CheckBox')
+            w.Value = logical(value);
+        elseif isa(w, 'matlab.ui.control.DropDown')
+
+            if ismember(value, w.Items)
+                w.Value = value;
+            else
+                w.Value = w.Items{1};
+            end
+
+        elseif isa(w, 'matlab.ui.control.ListBox')
+            allItems = w.Items;
+
+            if iscell(value)
+                w.Value = intersect(value, allItems, 'stable');
+            else
+                w.Value = {};
+            end
+
+        elseif isa(w, 'matlab.ui.control.NumericEditField') || isa(w, 'matlab.ui.control.Spinner')
+            w.Value = double(value(1));
+        else
+            w.Value = value;
+        end
+
+    end
+
+    function setImageSource(app, rgbImage)
+        % Directly set the ImageDisplay image source (no rescaling)
+        app.ImageDisplay.ImageSource = rgbImage;
+    end
+
+    function setAxisEqual(app)
+        % Make the axes holding the image have equal scaling
+        ax = ancestor(app.ImageDisplay, 'axes');
+        if ~isempty(ax)
+            axis(ax, 'equal');
+        end
+    end
+
+    % ---------------------------------------------------------------------
+    % Corrected Load method – no trailing backslash, proper path cleaning
+    % ---------------------------------------------------------------------
     function Load(app, path)
-        % Update lamp color to indicate loading
         app.statusLamp.Color = [1, 1/2, 0]; % Orange
         drawnow;
 
-        if isfolder(path)
-            path = strcat(path, '\');
+        % Normalise path: remove trailing slash/backslash
+        path = strrep(path, '/', filesep);
+        path = strrep(path, '\', filesep);
+
+        if endsWith(path, filesep)
+            path = path(1:end - 1);
         end
 
         totalLoadingTime = tic;
 
         try
-            % Add file
-            app.file = ExecutionClass(path);
-
+            rawDataPath = app.resolveDataFolder(path);
+            app.file = ExecutionClass(rawDataPath, path);
             app.file.AINetworks = app.AINetworks;
 
-            % Compute the mean of M0 along the third dimension
             mean_M0 = mean(app.file.M0, 3);
-            % Display the mean image in the uiimage component
             img = repmat(rescale(mean_M0), [1 1 3]);
             [numX, numY] = size(img);
-            app.ImageDisplay.ImageSource = imresize(img, [max(numX, numY) max(numX, numY)]); % Rescale the image for display
+            app.ImageDisplay.ImageSource = imresize(img, [max(numX, numY) max(numX, numY)]);
 
             % Enable buttons
             app.ExecuteButton.Enable = true;
@@ -79,21 +165,16 @@ methods (Access = public)
             app.ReProcessButton.Enable = true;
             app.ReferenceDirectory.Value = path;
 
-            % Update lamp color to indicate success
             app.statusLamp.Color = [0, 1, 0]; % Green
-
         catch ME
             MEdisp(ME, path);
             diary off
-            % Update lamp color to indicate error
             app.statusLamp.Color = [1, 0, 0]; % Red
         end
 
-        % Update checkbox states after loading
         app.CheckboxValueChanged();
-
-        fprintf("----------------------------------\n")
-        fprintf("- Total Load timing took : %ds\n", round(toc(totalLoadingTime)))
+        fprintf("----------------------------------\n");
+        fprintf("- Total Load timing took : %ds\n", round(toc(totalLoadingTime)));
     end
 
 end
@@ -101,10 +182,7 @@ end
 % Callbacks that handle component events
 methods (Access = public)
 
-    % Code that executes after component creation
     function startupFcn(app)
-
-        % Close any existing parallel pool
         delete(gcp('nocreate'))
 
         if exist("version.txt", 'file')
@@ -116,31 +194,22 @@ methods (Access = public)
                 "==================================\n", v(1));
         end
 
-        % Add necessary paths
         addpath("BloodFlowVelocity\", "BloodFlowVelocity\Elastography\", "CrossSection\", ...
             "Loading\", "Parameters\", "Preprocessing\", "Outputs\", ...
             "Scripts\", "Segmentation\", "SHAnalysis\", "Tools\");
-
-        % Set the UI title
         app.EyeFlowUIFigure.Name = ['EyeFlow ', char(v(1))];
-
-        % Display splash screen
         displaySplashScreen();
-
-        % Initialize checkbox states
         app.CheckboxValueChanged();
         set(groot, 'defaultFigureColor', 'w');
         set(groot, 'defaultAxesFontSize', 14);
-        set(groot, 'DefaultTextFontSize', 10); % For text objects (e.g., annotations)
-
+        set(groot, 'DefaultTextFontSize', 10);
         app.AINetworks = AINetworksClass();
     end
 
     function LoadFromTxt(app)
-
         [selected_file, path] = uigetfile('*.txt');
 
-        if (selected_file)
+        if selected_file
             files_lines = readlines(fullfile(path, selected_file));
 
             for nn = 1:length(files_lines)
@@ -155,7 +224,6 @@ methods (Access = public)
 
     end
 
-    % Button pushed function: LoadfolderButton
     function LoadfolderButtonPushed(app, ~)
 
         if ~isempty(app.file)
@@ -170,31 +238,25 @@ methods (Access = public)
             fprintf(2, 'No folder selected\n');
             return
         else
-            % Clearing before loading
             ClearButtonPushed(app);
             app.Load(selected_dir);
         end
 
     end
 
-    % Button pushed function: LoadHoloButton
     function LoadHoloButtonPushed(app, ~)
-
         [selected_holo, path_holo] = uigetfile('*.holo');
 
         if selected_holo == 0
             fprintf(2, 'No file selected\n');
         else
-            % Clearing before loading
             ClearButtonPushed(app);
             app.Load(fullfile(path_holo, selected_holo));
         end
 
     end
 
-    % Button pushed function: ExecuteButton
     function err = ExecuteButtonPushed(app, ~)
-
         err = [];
 
         if isempty(app.file)
@@ -202,17 +264,12 @@ methods (Access = public)
             return
         end
 
-        % Update lamp color to indicate processing
-        app.statusLamp.Color = [1, 1/2, 0]; % Orange
+        app.statusLamp.Color = [1, 1/2, 0];
         drawnow;
-
-        % Actualizes the input Parameters
-
         fprintf("\n==================================\n");
+        fclose all;
 
-        fclose all; % Close any open files
-
-        app.file.params_names = checkEyeFlowParamsFromJson(app.file.directory); % checks compatibility between found EF params and Default EF params of this version of EF.
+        app.file.params_names = checkEyeFlowParamsFromJson(app.file.directory);
         params = Parameters_json(app.file.directory, app.file.params_names{1});
 
         if params.json.NumberOfWorkers > 0 && params.json.NumberOfWorkers < app.NumberofWorkersSpinner.Limits(2)
@@ -220,20 +277,15 @@ methods (Access = public)
         end
 
         for i = 1:length(app.file.params_names)
-
             app.file.param_name = app.file.params_names{i};
-
             totalTime = tic;
-
             fprintf("\n==================================\n")
-
             app.file.flag_segmentation = app.segmentationCheckBox.Value;
             app.file.flag_bloodFlowVelocity_analysis = app.bloodFlowAnalysisCheckBox.Value;
             app.file.flag_pulseWaveVelocity = app.pulseVelocityCheckBox.Value;
             app.file.flag_crossSection_analysis = app.generateCrossSectionSignalsCheckBox.Value;
             app.file.flag_crossSection_export = app.exportCrossSectionResultsCheckBox.Value;
             app.file.flag_spectral_analysis = app.spectralAnalysisCheckBox.Value;
-
             err = [];
 
             try
@@ -246,35 +298,23 @@ methods (Access = public)
                 end
 
                 app.file.analyzeData(app);
-
-                % Update lamp color to indicate success
-                app.statusLamp.Color = [0, 1, 0]; % Green
-
+                app.statusLamp.Color = [0, 1, 0];
             catch ME
                 err = ME;
                 MEdisp(ME, app.file.directory);
-
-                % Update lamp color to indicate warning
-                app.statusLamp.Color = [1, 0, 0]; % Red
+                app.statusLamp.Color = [1, 0, 0];
                 diary off
             end
 
-            % Generate reports and outputs
-
             ReporterTimer = tic;
-            fprintf("\n----------------------------------\n" + ...
-                "Generating Reports\n" + ...
-            "----------------------------------\n");
+            fprintf("\n----------------------------------\nGenerating Reports\n----------------------------------\n");
             app.file.Reporter.getA4Report(err);
             app.file.Reporter.saveOutputs();
             fprintf("- Reporting took : %ds\n", round(toc(ReporterTimer)))
             app.file.Reporter.displayFinalSummary(totalTime);
-
         end
 
-        % Update checkbox states after execution
         app.CheckboxValueChanged();
-
     end
 
     function PlayMomentsButtonPushed(app, ~)
@@ -296,7 +336,6 @@ methods (Access = public)
 
     end
 
-    % Button pushed function: ClearButton
     function ClearButtonPushed(app, ~)
 
         if ~isempty(app.file)
@@ -304,9 +343,7 @@ methods (Access = public)
         end
 
         close all;
-
         app.ReferenceDirectory.Value = "";
-
         app.ExecuteButton.Enable = false;
         app.ClearButton.Enable = false;
         app.EditParametersButton.Enable = false;
@@ -314,46 +351,40 @@ methods (Access = public)
         app.ReProcessButton.Enable = false;
         app.EditMasksButton.Enable = false;
         app.PlayMomentsButton.Enable = false;
-
-        % Update checkbox states
         app.CheckboxValueChanged();
     end
 
-    % Callback function for Open Directory button
     function OpenDirectoryButtonPushed(app, ~)
 
         try
-            % Open the directory in the system file explorer
-            winopen(fullfile(app.file.directory, 'eyeflow')); % For Windows
-            % Use `open(app.file.directory)` for macOS/Linux
+            winopen(fullfile(app.file.directory, 'eyeflow'));
         catch
             fprintf(2, "No valid directory loaded.\n");
         end
 
     end
 
-    % Callback function for Open Directory button
+    % ---------------------------------------------------------------------
+    % Corrected ReProcessButtonPushed – passes both data and original folder
+    % ---------------------------------------------------------------------
     function ReProcessButtonPushed(app, ~)
-
-        % Update lamp color to indicate processing
-        app.statusLamp.Color = [1, 1/2, 0]; % Orange
+        app.statusLamp.Color = [1, 1/2, 0];
         drawnow;
 
         try
             parfor_arg = app.NumberofWorkersSpinner.Value;
             setupParpool(parfor_arg);
-            app.file = ExecutionClass(app.file.directory);
+            % Use stored original and data paths
+            dataPath = app.file.directory;
+            originalPath = app.file.originalParentPath;
+            app.file = ExecutionClass(dataPath, originalPath);
             app.file.AINetworks = app.AINetworks;
             app.file.preprocessData();
-
-            % Update lamp color to indicate success
-            app.statusLamp.Color = [0, 1, 0]; % Green
+            app.statusLamp.Color = [0, 1, 0];
             drawnow;
         catch ME
             MEdisp(ME, app.file.directory);
-
-            % Update lamp color to indicate warning
-            app.statusLamp.Color = [1, 0, 0]; % Red
+            app.statusLamp.Color = [1, 0, 0];
             drawnow;
             diary off
         end
@@ -371,7 +402,6 @@ methods (Access = public)
 
     end
 
-    % Button pushed function: EditParametersButton
     function EditParametersButtonPushed(app, ~)
 
         try
@@ -390,7 +420,6 @@ methods (Access = public)
 
     end
 
-    % Button pushed function: EditMasksButton
     function EditMasksButtonPushed(app, ~)
         ToolBox = getGlobalToolBox;
 
@@ -400,12 +429,12 @@ methods (Access = public)
 
         if ~isempty(app.file)
 
-            if ~isfolder(fullfile(ToolBox.path_main, 'mask'))
-                mkdir(fullfile(ToolBox.path_main, 'mask'))
+            if ~isfolder(fullfile(ToolBox.EF_path, 'mask'))
+                mkdir(fullfile(ToolBox.EF_path, 'mask'))
             end
 
             try
-                winopen(fullfile(ToolBox.path_main, 'mask'));
+                winopen(fullfile(ToolBox.EF_path, 'mask'));
             catch
                 disp("opening failed.")
             end
@@ -417,36 +446,33 @@ methods (Access = public)
             end
 
             try
-                list_dir = dir(ToolBox.path_main);
-                idx = 0;
+                list_dir = dir(ToolBox.EF_path);
 
                 for i = 1:length(list_dir)
 
-                    if contains(list_dir(i).name, ToolBox.EF_name)
+                    if contains(list_dir(i).name, ToolBox.folder_name)
                         match = regexp(list_dir(i).name, '\d+$', 'match');
 
                         if ~isempty(match) && str2double(match{1}) >= idx
-                            idx = str2double(match{1}); %suffix
+                            idx = str2double(match{1});
                         end
 
                     end
 
                 end
 
-                path_dir = fullfile(ToolBox.path_main, ToolBox.folder_name);
-
+                path_dir = fullfile(ToolBox.EF_path, ToolBox.folder_name);
                 disp(['Copying from : ', fullfile(path_dir, 'png', 'mask')])
-                copyfile(fullfile(path_dir, 'png', 'mask', sprintf("%s_maskArtery.png", ToolBox.folder_name)), fullfile(ToolBox.path_main, 'mask', 'MaskArtery.png'));
-                copyfile(fullfile(path_dir, 'png', 'mask', sprintf("%s_maskVein.png", ToolBox.folder_name)), fullfile(ToolBox.path_main, 'mask', 'MaskVein.png'));
+                copyfile(fullfile(path_dir, 'png', 'mask', sprintf("%s_maskArtery.png", ToolBox.folder_name)), fullfile(ToolBox.EF_path, 'mask', 'MaskArtery.png'));
+                copyfile(fullfile(path_dir, 'png', 'mask', sprintf("%s_maskVein.png", ToolBox.folder_name)), fullfile(ToolBox.EF_path, 'mask', 'MaskVein.png'));
             catch
                 disp("last auto mask copying failed.")
             end
 
             try
-
-                copyfile(fullfile(ToolBox.EF_path, 'png', sprintf("%s_M0.png", ToolBox.main_foldername)), fullfile(ToolBox.path_main, 'mask', 'M0.png'));
-                folder_name = ToolBox.main_foldername;
-                list_dir = dir(ToolBox.path_main);
+                copyfile(fullfile(ToolBox.EF_path, 'png', sprintf("%s_M0.png", ToolBox.folder_name)), fullfile(ToolBox.EF_path, 'mask', 'M0.png'));
+                folder_name = ToolBox.folder_name;
+                list_dir = dir(ToolBox.EF_path);
                 idx = 0;
 
                 for i = 1:length(list_dir)
@@ -455,25 +481,23 @@ methods (Access = public)
                         match = regexp(list_dir(i).name, '\d+$', 'match');
 
                         if ~isempty(match) && str2double(match{1}) >= idx
-                            idx = str2double(match{1}); %suffix
+                            idx = str2double(match{1});
                         end
 
                     end
 
                 end
 
-                folder_name = sprintf('%s_%d', ToolBox.EF_name, idx);
-                copyfile(fullfile(ToolBox.path_main, folder_name, 'gif', sprintf("%s_M0.gif", folder_name)), fullfile(ToolBox.path_main, 'mask', 'M0.gif'));
+                folder_name = sprintf('%s_%d', ToolBox.folder_name, idx);
+                copyfile(fullfile(ToolBox.EF_path, folder_name, 'gif', sprintf("%s_M0.gif", folder_name)), fullfile(ToolBox.EF_path, 'mask', 'M0.gif'));
             catch
-
                 disp("last M0 png and gif copying failed")
             end
 
             try
-
-                copyfile(fullfile(ToolBox.EF_path, 'png', sprintf("%s_M0.png", ToolBox.main_foldername)), fullfile(ToolBox.path_main, 'mask', 'M0.png'));
-                folder_name = ToolBox.main_foldername;
-                list_dir = dir(ToolBox.path_main);
+                copyfile(fullfile(ToolBox.EF_path, 'png', sprintf("%s_M0.png", ToolBox.folder_name)), fullfile(ToolBox.EF_path, 'mask', 'M0.png'));
+                folder_name = ToolBox.folder_name;
+                list_dir = dir(ToolBox.EF_path);
                 idx = 0;
 
                 for i = 1:length(list_dir)
@@ -482,44 +506,27 @@ methods (Access = public)
                         match = regexp(list_dir(i).name, '\d+$', 'match');
 
                         if ~isempty(match) && str2double(match{1}) >= idx
-                            idx = str2double(match{1}); %suffix
+                            idx = str2double(match{1});
                         end
 
                     end
 
                 end
 
-                folder_name = sprintf('%s_%d', ToolBox.EF_name, idx);
-                copyfile(fullfile(ToolBox.path_main, folder_name, 'png', 'mask', sprintf("%s_DiaSysRGB.png", folder_name)), fullfile(ToolBox.path_main, 'mask', 'DiaSysRGB.png'));
+                folder_name = sprintf('%s_%d', ToolBox.folder_name, idx);
+                copyfile(fullfile(ToolBox.EF_path, folder_name, 'png', 'mask', sprintf("%s_DiaSysRGB.png", folder_name)), fullfile(ToolBox.EF_path, 'mask', 'DiaSysRGB.png'));
             catch
-
                 disp("Diasys png failed")
-
             end
 
-            % try
-            % %   Commented until further fixes MESSAGE TO ZACHARIE
-            %     openmaskinpaintnet(fullfile(ToolBox.path_main,'mask','M0.png'), fullfile(ToolBox.path_main,'mask','DiaSysRGB.png'));
-            % catch
-            %     disp("paint.net macro failed")
-            % end
-
         else
-
             fprintf(2, "no input loaded\n")
-
         end
 
     end
 
     function CheckboxValueChanged(app, ~)
-        % Callback function triggered when any checkbox is clicked.
-        % This function enforces the rules for enabling/disabling checkboxes.
-
-        % Segmentation Checkbox is always enabled
         app.segmentationCheckBox.Enable = true;
-
-        % Determine the current state of the file analysis
         is_segmented = false;
         is_velocityAnalyzed = false;
         is_volumeRateAnalyzed = false;
@@ -530,18 +537,16 @@ methods (Access = public)
             is_volumeRateAnalyzed = app.file.is_volumeRateAnalyzed;
         end
 
-        % Enable/disable bloodFlowAnalysisCheckBox, pulseVelocityCheckBox, and spectralAnalysisCheckBox
         if app.segmentationCheckBox.Value || is_segmented
             app.bloodFlowAnalysisCheckBox.Enable = true;
             app.spectralAnalysisCheckBox.Enable = true;
         else
             app.bloodFlowAnalysisCheckBox.Enable = false;
             app.spectralAnalysisCheckBox.Enable = false;
-            app.bloodFlowAnalysisCheckBox.Value = false; % Turn off if disabled
+            app.bloodFlowAnalysisCheckBox.Value = false;
             app.spectralAnalysisCheckBox.Value = false;
         end
 
-        % Enable/disable generateCrossSectionSignalsCheckBox
         if app.bloodFlowAnalysisCheckBox.Value || is_velocityAnalyzed
             app.generateCrossSectionSignalsCheckBox.Enable = true;
             app.pulseVelocityCheckBox.Enable = true;
@@ -549,52 +554,90 @@ methods (Access = public)
             app.pulseVelocityCheckBox.Enable = false;
             app.generateCrossSectionSignalsCheckBox.Enable = false;
             app.pulseVelocityCheckBox.Value = false;
-            app.generateCrossSectionSignalsCheckBox.Value = false; % Turn off if disabled
+            app.generateCrossSectionSignalsCheckBox.Value = false;
         end
 
-        % Enable/disable exportCrossSectionResultsCheckBox
         if app.generateCrossSectionSignalsCheckBox.Value || is_volumeRateAnalyzed
             app.exportCrossSectionResultsCheckBox.Enable = true;
         else
             app.exportCrossSectionResultsCheckBox.Enable = false;
-            app.exportCrossSectionResultsCheckBox.Value = false; % Turn off if disabled
+            app.exportCrossSectionResultsCheckBox.Value = false;
         end
 
     end
 
 end
 
+methods (Access = private)
+
+    function dataFolder = resolveDataFolder(app, selectedPath)
+
+        if app.containsRawData(selectedPath)
+            dataFolder = selectedPath;
+            return;
+        end
+
+        hdDirs = dir(fullfile(selectedPath, '*_HD'));
+        hdDirs = hdDirs([hdDirs.isdir]);
+
+        for i = 1:length(hdDirs)
+            candidate = fullfile(selectedPath, hdDirs(i).name);
+
+            if app.containsRawData(candidate)
+                dataFolder = candidate;
+                return;
+            end
+
+        end
+
+        dataFolder = selectedPath;
+    end
+
+    function hasData = containsRawData(~, folder)
+        rawSub = fullfile(folder, 'raw');
+
+        if isfolder(rawSub)
+            h5 = dir(fullfile(rawSub, '*.h5'));
+            raw = dir(fullfile(rawSub, '*.raw'));
+
+            if ~isempty(h5) || ~isempty(raw)
+                hasData = true;
+                return;
+            end
+
+        end
+
+        h5 = dir(fullfile(folder, '*.h5'));
+        raw = dir(fullfile(folder, '*.raw'));
+        hasData = ~isempty(h5) || ~isempty(raw);
+    end
+
+end
+
 % =========================================================================
-% Component initialisation – modernised with panels and grid layouts
+% Component initialisation
 % =========================================================================
 methods (Access = private)
 
     function createComponents(app)
-        % Master entry point – builds all UI components
         pathToMLAPP = fileparts(mfilename('fullpath'));
-
         app.createFigure(pathToMLAPP);
         app.createRootGrid();
         app.createFileSelectionPanel();
         app.createProcessingOptionsPanel();
         app.createExecutionToolsPanel();
         app.createImageDisplay();
-
-        % Global appearance
         fontname(app.EyeFlowUIFigure, 'Arial');
         fontsize(app.EyeFlowUIFigure, 12, "points");
-
         app.EyeFlowUIFigure.Visible = 'on';
     end
 
-    % ---------------------------------------------------------------------
     function createFigure(app, pathToMLAPP)
         screenSize = get(0, 'ScreenSize');
         appWidth = 1050;
         appHeight = 500;
         appX = (screenSize(3) - appWidth) / 2;
         appY = (screenSize(4) - appHeight) / 2;
-
         app.EyeFlowUIFigure = uifigure('Visible', 'off', ...
             'Position', [appX, appY, appWidth, appHeight], ...
             'Color', [0.2 0.2 0.2], ...
@@ -603,9 +646,7 @@ methods (Access = private)
             'WindowStyle', 'normal');
     end
 
-    % ---------------------------------------------------------------------
     function createRootGrid(app)
-        % Main grid: two columns (left panels, right image)
         app.RootGrid = uigridlayout(app.EyeFlowUIFigure, [3, 2], ...
             'ColumnWidth', {'fit', '1x'}, ...
             'RowHeight', {'1x', 'fit', 'fit'}, ...
@@ -615,16 +656,20 @@ methods (Access = private)
             'BackgroundColor', [0.2 0.2 0.2]);
     end
 
-    % ---------------------------------------------------------------------
     function createFileSelectionPanel(app)
         import matlab.ui.container.Panel
         import matlab.ui.container.GridLayout
         import matlab.ui.control.*
 
+        backgroundColor = [0.2 0.2 0.2];
+        darkBackgroundColor = [0.15 0.15 0.15];
+        fontColor = [1 1 1];
+        grayButtonColor = [0.5 0.5 0.5];
+
         panel = uipanel(app.RootGrid, ...
             'Title', 'File Selection', ...
-            'BackgroundColor', [0.2 0.2 0.2], ...
-            'ForegroundColor', [1 1 1], ...
+            'BackgroundColor', backgroundColor, ...
+            'ForegroundColor', fontColor, ...
             'BorderType', 'line', ...
             'FontWeight', 'bold');
         panel.Layout.Row = 1;
@@ -636,9 +681,8 @@ methods (Access = private)
             'Padding', [10 10 10 10], ...
             'RowSpacing', 5, ...
             'ColumnSpacing', 5, ...
-            'BackgroundColor', [0.2 0.2 0.2]);
+            'BackgroundColor', backgroundColor);
 
-        % Row 1: Load buttons
         app.LoadFolderButton = uibutton(grid, 'push', ...
             'Text', 'Load Folder', ...
             'BackgroundColor', [0.5 0.5 0.5], ...
@@ -649,7 +693,7 @@ methods (Access = private)
 
         app.LoadHoloButton = uibutton(grid, 'push', ...
             'Text', 'Load Holo', ...
-            'BackgroundColor', [0.5 0.5 0.5], ...
+            'BackgroundColor', grayButtonColor, ...
             'FontColor', [1 1 1], ...
             'ButtonPushedFcn', @(~, ~) app.LoadHoloButtonPushed());
         app.LoadHoloButton.Layout.Row = 1;
@@ -657,7 +701,7 @@ methods (Access = private)
 
         app.ClearButton = uibutton(grid, 'push', ...
             'Text', 'Clear', ...
-            'BackgroundColor', [0.5 0.5 0.5], ...
+            'BackgroundColor', grayButtonColor, ...
             'FontColor', [1 1 1], ...
             'Enable', 'off', ...
             'ButtonPushedFcn', @(~, ~) app.ClearButtonPushed());
@@ -666,25 +710,23 @@ methods (Access = private)
 
         app.FolderManagementButton = uibutton(grid, 'push', ...
             'Text', 'Folder Management', ...
-            'BackgroundColor', [0.5 0.5 0.5], ...
+            'BackgroundColor', grayButtonColor, ...
             'FontColor', [1 1 1], ...
             'ButtonPushedFcn', @(~, ~) app.FolderManagementButtonPushed());
         app.FolderManagementButton.Layout.Row = 1;
         app.FolderManagementButton.Layout.Column = 4;
 
-        % Row 2: Directory display + lamp
         app.ReferenceDirectory = uitextarea(grid, ...
             'Value', '', ...
             'Editable', 'off', ...
-            'BackgroundColor', [0.15 0.15 0.15], ...
+            'BackgroundColor', darkBackgroundColor, ...
             'FontColor', [1 1 1]);
         app.ReferenceDirectory.Layout.Row = 2;
         app.ReferenceDirectory.Layout.Column = [1 4];
 
-        % Row 3: Edit tools buttons
         app.EditParametersButton = uibutton(grid, 'push', ...
             'Text', 'Edit Parameters', ...
-            'BackgroundColor', [0.5 0.5 0.5], ...
+            'BackgroundColor', grayButtonColor, ...
             'FontColor', [1 1 1], ...
             'Enable', 'off', ...
             'Tooltip', 'Open the JSON parameter file', ...
@@ -694,7 +736,7 @@ methods (Access = private)
 
         app.EditMasksButton = uibutton(grid, 'push', ...
             'Text', 'Edit Masks', ...
-            'BackgroundColor', [0.5 0.5 0.5], ...
+            'BackgroundColor', grayButtonColor, ...
             'FontColor', [1 1 1], ...
             'Enable', 'off', ...
             'Tooltip', 'Open mask folder for manual editing', ...
@@ -704,7 +746,7 @@ methods (Access = private)
 
         app.PlayMomentsButton = uibutton(grid, 'push', ...
             'Text', 'Play Moments', ...
-            'BackgroundColor', [0.5 0.5 0.5], ...
+            'BackgroundColor', grayButtonColor, ...
             'FontColor', [1 1 1], ...
             'Enable', 'off', ...
             'Tooltip', 'Play M0/M1/M2 videos', ...
@@ -713,7 +755,6 @@ methods (Access = private)
         app.PlayMomentsButton.Layout.Column = 3;
     end
 
-    % ---------------------------------------------------------------------
     function createProcessingOptionsPanel(app)
         panel = uipanel(app.RootGrid, ...
             'Title', 'Processing Options', ...
@@ -731,7 +772,6 @@ methods (Access = private)
             'RowSpacing', 8, ...
             'BackgroundColor', [0.2 0.2 0.2]);
 
-        % Segmentation (full width)
         app.segmentationCheckBox = uicheckbox(grid, ...
             'Text', 'Segmentation', ...
             'Value', true, ...
@@ -741,7 +781,6 @@ methods (Access = private)
         app.segmentationCheckBox.Layout.Row = 1;
         app.segmentationCheckBox.Layout.Column = [1 2];
 
-        % Blood Flow Analysis & Pulse Analysis
         app.bloodFlowAnalysisCheckBox = uicheckbox(grid, ...
             'Text', 'Blood Flow Analysis', ...
             'Value', true, ...
@@ -760,7 +799,6 @@ methods (Access = private)
         app.pulseVelocityCheckBox.Layout.Row = 2;
         app.pulseVelocityCheckBox.Layout.Column = 2;
 
-        % Cross Section Signals & Export
         app.generateCrossSectionSignalsCheckBox = uicheckbox(grid, ...
             'Text', 'Generate Cross Section Signals', ...
             'Value', false, ...
@@ -779,7 +817,6 @@ methods (Access = private)
         app.exportCrossSectionResultsCheckBox.Layout.Row = 3;
         app.exportCrossSectionResultsCheckBox.Layout.Column = 2;
 
-        % Spectral Analysis (full width)
         app.spectralAnalysisCheckBox = uicheckbox(grid, ...
             'Text', 'Spectral Analysis', ...
             'Value', false, ...
@@ -788,9 +825,9 @@ methods (Access = private)
             'ValueChangedFcn', @(~, ~) app.CheckboxValueChanged());
         app.spectralAnalysisCheckBox.Layout.Row = 4;
         app.spectralAnalysisCheckBox.Layout.Column = [1 2];
+
     end
 
-    % ---------------------------------------------------------------------
     function createExecutionToolsPanel(app)
         panel = uipanel(app.RootGrid, ...
             'Title', 'Execution & Tools', ...
@@ -809,7 +846,6 @@ methods (Access = private)
             'ColumnSpacing', 8, ...
             'BackgroundColor', [0.2 0.2 0.2]);
 
-        % Execute button (green)
         app.ExecuteButton = uibutton(grid, 'push', ...
             'Text', 'Execute', ...
             'BackgroundColor', [0.2 0.6 0.2], ...
@@ -819,7 +855,6 @@ methods (Access = private)
         app.ExecuteButton.Layout.Row = 1;
         app.ExecuteButton.Layout.Column = 1;
 
-        % Open Directory button
         app.OpenDirectoryButton = uibutton(grid, 'push', ...
             'Text', 'Open Directory', ...
             'BackgroundColor', [0.5 0.5 0.5], ...
@@ -829,7 +864,6 @@ methods (Access = private)
         app.OpenDirectoryButton.Layout.Row = 1;
         app.OpenDirectoryButton.Layout.Column = 2;
 
-        % Preprocess button
         app.ReProcessButton = uibutton(grid, 'push', ...
             'Text', 'Preprocess', ...
             'BackgroundColor', [0.5 0.5 0.5], ...
@@ -839,7 +873,6 @@ methods (Access = private)
         app.ReProcessButton.Layout.Row = 1;
         app.ReProcessButton.Layout.Column = 3;
 
-        % Workers label and spinner
         app.NumberofWorkersSpinnerLabel = uilabel(grid, ...
             'Text', 'Workers:', ...
             'HorizontalAlignment', 'right', ...
@@ -855,13 +888,11 @@ methods (Access = private)
         app.NumberofWorkersSpinner.Layout.Row = 2;
         app.NumberofWorkersSpinner.Layout.Column = 4;
 
-        app.statusLamp = uilamp(grid, ...
-            'Color', [0 1 0]); % green
+        app.statusLamp = uilamp(grid, 'Color', [0 1 0]);
         app.statusLamp.Layout.Row = 2;
         app.statusLamp.Layout.Column = 1;
     end
 
-    % ---------------------------------------------------------------------
     function createImageDisplay(app)
         app.ImageDisplay = uiimage(app.RootGrid);
         app.ImageDisplay.Layout.Row = [1 3];
@@ -872,19 +903,11 @@ methods (Access = private)
 
 end
 
-% App creation and deletion
 methods (Access = public)
 
-    % Construct app
     function app = eyeflow
-
-        % Create UIFigure and components
         createComponents(app)
-
-        % Register the app with App Designer
         registerApp(app, app.EyeFlowUIFigure)
-
-        % Execute the startup function
         runStartupFcn(app, @startupFcn)
 
         if nargout == 0
@@ -893,10 +916,7 @@ methods (Access = public)
 
     end
 
-    % Code that executes before app deletion
     function delete(app)
-
-        % Delete UIFigure when app is deleted
         delete(app.EyeFlowUIFigure)
     end
 

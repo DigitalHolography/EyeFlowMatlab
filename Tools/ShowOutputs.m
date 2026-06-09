@@ -61,8 +61,8 @@ for path_idx = 1:N
     current_path = paths{path_idx};
 
     % Extract main folder name and construct expected EF folder name
-    [~, main_foldername] = fileparts(current_path);
-    folder_base = [char(main_foldername) '_EF'];
+    [~, folder_name] = fileparts(current_path);
+    folder_base = [char(folder_name) '_EF'];
     ef_path = fullfile(current_path, 'eyeflow');
 
     % Skip if EyeFlow directory doesn't exist
@@ -140,8 +140,8 @@ pdf_list = "";
 for path_idx = 1:N
     current_path = paths{path_idx};
     % Extract main folder name and construct expected EF folder name
-    [~, main_foldername] = fileparts(current_path);
-    folder_base = [char(main_foldername) '_EF'];
+    [~, folder_name] = fileparts(current_path);
+    folder_base = [char(folder_name) '_EF'];
     ef_path = fullfile(current_path, 'eyeflow');
 
     % Skip if EyeFlow directory doesn't exist

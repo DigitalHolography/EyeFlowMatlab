@@ -15,8 +15,8 @@ function [results, log] = segmentationScores(maskArtery, maskVein)
 ToolBox = getGlobalToolBox;
 
 % Check if the target masks exist, otherwise return an error message
-targetMaskArteryPath = fullfile(ToolBox.path_main, 'mask', 'targetMaskArtery.png');
-targetMaskVeinPath = fullfile(ToolBox.path_main, 'mask', 'targetMaskVein.png');
+targetMaskArteryPath = fullfile(ToolBox.EF_path, 'mask', 'targetMaskArtery.png');
+targetMaskVeinPath = fullfile(ToolBox.EF_path, 'mask', 'targetMaskVein.png');
 
 if ~isfile(targetMaskArteryPath) || ~isfile(targetMaskVeinPath)
     return

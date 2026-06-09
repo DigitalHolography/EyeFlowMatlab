@@ -10,8 +10,8 @@ title('Flow Rate')
 
 for ind = 1:length(paths)
     split_path = strsplit(paths(ind), '\');
-    main_foldername = split_path{end};
-    folder_name = strcat(main_foldername, '_EF');
+    folder_name = split_path{end};
+    folder_name = strcat(folder_name, '_EF');
     path = fullfile(paths(ind), 'eyeflow');
     list_dir = dir(path);
     idx = 0;

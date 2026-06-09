@@ -1,16 +1,16 @@
 function readHDF5(obj)
 
-dir_path_raw = fullfile(obj.directory, 'raw');
+dir_path_h5 = fullfile(obj.directory, 'h5');
 
 % Search for all .h5 files in the folder
-h5_files = dir(fullfile(dir_path_raw, '*.h5'));
+h5_files = dir(fullfile(dir_path_h5, '*.h5'));
 
 if isempty(h5_files)
-    error('No HDF5 file was found in the folder: %s', dir_path_raw);
+    error('No HDF5 file was found in the folder: %s', dir_path_h5);
 end
 
 % Takes the first .h5 file found
-RefRawFilePath = fullfile(dir_path_raw, h5_files(1).name);
+RefRawFilePath = fullfile(dir_path_h5, h5_files(1).name);
 
 fprintf('    - Reading the HDF5 file: %s\n', h5_files(1).name);
 

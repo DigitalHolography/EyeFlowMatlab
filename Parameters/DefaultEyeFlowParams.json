@@ -13,6 +13,12 @@
       "Alpha Convolve Norm": 1,
       "NormTempMode": false
     },
+    "OutlierClipping": {
+      "Enable": true,
+      "LowPercentile": 0.1,
+      "HighPercentile": 99.9,
+      "RescaleOutput": false
+    },
     "Resize": {
       "FrameWidth": -1,
       "FrameHeight": -1,

@@ -67,8 +67,8 @@ hold on;
 
 for ind = 1:length(paths)
     split_path = strsplit(paths(ind), '\');
-    main_foldername = split_path{end};
-    folder_name = strcat(main_foldername, '_EF');
+    folder_name = split_path{end};
+    folder_name = strcat(folder_name, '_EF');
     ef_path = fullfile(paths(ind), 'eyeflow');
     list_dir = dir(ef_path);
     idx = 0;

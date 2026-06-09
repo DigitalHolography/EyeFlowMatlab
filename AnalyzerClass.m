@@ -124,9 +124,8 @@ methods
 
         % Display the mask on the app if available
         if ~isempty(app)
-            app.ImageDisplay.ImageSource = M0_RGB;
-            ax = ancestor(app.ImageDisplay, 'axes');
-            axis(ax, 'equal');
+            app.setImageSource(M0_RGB);
+            app.setAxisEqual();
         end
 
         executionObj.is_segmented = true;
