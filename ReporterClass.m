@@ -44,14 +44,16 @@ methods
 
     end
 
-    function saveOutputs(obj, ~)
+    function saveOutputs(~, ~)
         tic
         fprintf("Saving Outputs...\n");
         ToolBox = getGlobalToolBox;
 
         if ~isempty(ToolBox.Output)
+            fprintf("Saving Outputs to JSON...\n");
             ToolBox.Output.writeJson(fullfile(ToolBox.path_json, sprintf("%s_output.json", ToolBox.folder_name)));
             disp("JSON output is done");
+            fprintf("Saving Outputs to HDF5...\n");
             ToolBox.Output.writeHdf5(fullfile(ToolBox.path_h5, sprintf("%s_output.h5", ToolBox.folder_name)));
             disp("H5 output is done");
         else
@@ -122,7 +124,7 @@ methods
         displaySuccessMsg(1);
     end
 
-    function generateReport(obj, executionObj)
+    function generateReport(obj, ~)
         totalTime = tic;
         obj.getA4Report();
         obj.saveOutputs();
