@@ -120,7 +120,7 @@ if saveFigures
         t, f_artery, '-', cArtery, ...
         t, f_artery_bkg, '--', cBlack, ...
         'xlabel', 'Time(s)', 'ylabel', 'frequency (kHz)', ...
-        'Legend', {'arteries', 'background'});
+        'Legend', {'arteries', 'background'}, 'ylim', [12.5 15.5]);
 
     graphSignal('f_vein', ...
         t, f_vein, '-', cVein, ...
@@ -137,9 +137,9 @@ if saveFigures
 
     LocalBackground_in_vessels = mean(f_bkg, 3);
 
-    LocalBackground_in_vessels(maskNeighbors) = mean(LocalBackground_in_vessels(maskNeighbors),"all");
+    % LocalBackground_in_vessels(maskNeighbors) = mean(LocalBackground_in_vessels(maskNeighbors),"all");
     createHeatmap(LocalBackground_in_vessels, 'background in vessels', ...
-        'background RMS frequency (kHz)', fullfile(ToolBox.path_png, sprintf("%s_f_bkg_map.png", ToolBox.folder_name)));
+        'background RMS frequency (kHz)', fullfile(ToolBox.path_png, sprintf("%s_f_bkg_map.png", ToolBox.folder_name)), [7 19], 20);
 end
 
 if exportVideos
@@ -210,7 +210,7 @@ if saveFigures
     % Raw RMS frequency map
     raw_map = squeeze(mean(f_video, 3));
     createHeatmap(raw_map, 'RMS frequency map RAW', ...
-        'RMS frequency (kHz)', fullfile(ToolBox.path_png, sprintf("%s_f_map.png", ToolBox.folder_name)));
+        'RMS frequency (kHz)', fullfile(ToolBox.path_png, sprintf("%s_f_map.png", ToolBox.folder_name)), [7 19], 20);
 
 end
 
@@ -254,10 +254,10 @@ if saveFigures
     graphSignal('v_vessel', ...
         t, v_artery_signal, '-', cArtery, ...
         t, v_vein_signal, '-', cVein, ...
-        'Title', 'average velocity in arteries and veins', 'xlabel', 'Time(s)', 'ylabel', 'Velocity (mm/s)');
+        'Title', 'average velocity in arteries and veins', 'xlabel', 'Time(s)', 'ylabel', 'Velocity (mm/s)', 'ylim', [-1.5 46]);
     graphSignal('v_artery', ...
         t, v_artery_signal, '-', cArtery, ...
-        'Title', 'average velocity in arteries', 'xlabel', 'Time(s)', 'ylabel', 'Velocity (mm/s)');
+        'Title', 'average velocity in arteries', 'xlabel', 'Time(s)', 'ylabel', 'Velocity (mm/s)', 'ylim', [-1.5 46]);
 end
 
 ToolBox.Output.add('Time', t, 's', h5path = '/Meta/Time');
@@ -274,7 +274,8 @@ fprintf("    2. Difference calculation and velocity computation took %ds\n", rou
 tic;
 
 % Find systole indices
-[sys_idx_list, pulse_artery, sys_max_list, sys_min_list] = find_systole_index(v_artery_signal, 'pulseVein', v_vein_signal);
+
+[sys_idx_list, pulse_artery, sys_max_list, sys_min_list] = find_systole_index(v_artery_signal);
 
 [M0_Systole_img, M0_Diastole_img, sys_idx, dias_idx] = compute_diasys(v_RMS_video, maskArterySection);
 
@@ -287,7 +288,9 @@ if saveFigures
     v_RMS_img = mean(v_RMS_video, 3, 'omitnan');
     diasys_diff = M0_Systole_img - M0_Diastole_img;
     RGBdiasys = labDuoImage(rescale(v_RMS_img), diasys_diff);
+    try
     saveMaskImage(RGBdiasys, 'vessel_21_diasys_diff.png', isStep = true);
+    end
 end
 
 % Process heart beat data if enough cycles detected
@@ -341,18 +344,21 @@ tic;
 
 % Calculate resistivity index
 ArterialResistivityIndex(v_artery_signal, sys_idx_list, 'v_artery', ForceFigure = true);
+try
 ArterialResistivityIndex(v_vein_signal, sys_idx_list, 'v_vein', ForceFigure = true);
-
+end
 % Perform waveform analysis
 v_artery_interp = ArterialWaveformAnalysis(v_artery_signal, sys_idx_list, 128, 'v_artery');
+try
 v_vein_interp = VenousWaveformAnalysis(v_vein_signal, sys_idx_list, 128, 'v_vein');
-
+end
 % Correlation analysis
+try
 arterial_venous_correlation(v_artery_signal, -v_vein_signal);
 
 % Delay analysis
 arterial_venous_delay(v_artery_interp, v_vein_interp);
-
+end
 fprintf("    4. Resistivity and waveform analysis took %ds\n", round(toc()));
 
 % Section 5: Visualization and Output Generation
@@ -373,13 +379,13 @@ if saveFigures
 
     % Generate histograms
     histoVideoArtery = VelocityHistogram(v_RMS_video, maskArterySection, 'artery');
-
+    try
     histoVideoVein = VelocityHistogram(v_RMS_video, maskVeinSection, 'vein');
-
+    
     % Generate combined visualizations
     createCombinedVisualizations(v_mean_RGB, histoVideoArtery, histoVideoVein, ...
         v_video_RGB, numFrames, exportVideos, ToolBox);
-
+    end
 end
 
 fprintf("    5. Visualization and output generation took %ds\n", round(toc));
@@ -407,43 +413,78 @@ fprintf(fileID, 'Time diastolic min to systolic max (ms): %f \r\n', TimeToPeakSy
 fclose(fileID);
 end
 
-function createHeatmap(data, titleStr, cbarStr, filename)
-% Helper function to create a single heatmap
-f = figure("Visible", "off");
-f.Position = [1100 485 350 420];
-imagesc(data);
-colormap gray
-title(titleStr);
-fontsize(gca, 12, "points");
-set(gca, 'LineWidth', 2);
-c = colorbar('southoutside');
-c.Label.String = cbarStr;
-c.Label.FontSize = 12;
-axis off
-axis image
-rangeVals = clim;
+function createHeatmap(data, titleStr, cbarStr, filename, climVals, cbarFontSize)
+% createHeatmap
+%
+% climVals:
+%   Optional [min max] values to force color scaling.
+%   Pass [] to use automatic scaling.
+%
+% cbarFontSize:
+%   Optional font size for colorbar text/title.
+%   Default = 12.
 
-imwrite(rescale(data), filename);
+    if nargin < 5 || isempty(climVals)
+        climVals = [];
+    end
+    if nargin < 6 || isempty(cbarFontSize)
+        cbarFontSize = 12;
+    end
 
-% Create colorbar figure
-colorfig = figure("Visible", "off");
-colorfig.Units = 'normalized';
-colormap gray
-cbar = colorbar('north');
-clim(rangeVals);
-set(gca, 'Visible', false);
-set(gca, 'LineWidth', 3);
-cbar.Position = [0.10 0.3 0.81 0.35];
-colorfig.Position(4) = 0.1000;
-fontsize(gca, 15, "points");
-colorTitleHandle = get(cbar, 'Title');
-set(colorTitleHandle, 'String', cbarStr);
+    % Main heatmap
+    % ---------------------------------------------------------------------
+    f = figure("Visible", "off");
+    f.Position = [1100 485 350 420];
+    imagesc(data);
+    colormap gray
+    if ~isempty(climVals)
+        clim(climVals);
+    end
+    title(titleStr);
 
-[pathstr, name, ext] = fileparts(filename);
-exportgraphics(gca, fullfile(pathstr, strrep(name, '_map', '_colorBar') + ext));
-exportgraphics(gca, fullfile(strrep(pathstr, 'png', 'eps'), strrep(name, '_map', '_colorBar') + ".eps"));
+    fontsize(gca, 12, "points");
+    set(gca, 'LineWidth', 2);
+    c = colorbar('southoutside');
+    c.Label.String = cbarStr;
+    c.Label.FontSize = cbarFontSize;
+    axis off
+    axis image
+    rangeVals = clim;
+    imwrite(rescale(data), filename);
+    % ---------------------------------------------------------------------
+    % Colorbar-only figure
+    % ---------------------------------------------------------------------
+    colorfig = figure("Visible", "off");
+    colorfig.Units = 'normalized';
 
-close([f, colorfig]);
+    colormap gray
+
+    cbar = colorbar('north');
+    clim(rangeVals);
+    set(gca, 'Visible', false);
+    set(gca, 'LineWidth', 3);
+    cbar.Position = [0.10 0.3 0.81 0.35];
+    colorfig.Position(4) = 0.1000;
+    fontsize(gca, cbarFontSize, "points");
+    colorTitleHandle = get(cbar, 'Title');
+    set(colorTitleHandle, ...
+        'String', cbarStr, ...
+        'FontSize', cbarFontSize);
+    % Optional: also scale tick labels
+    cbar.FontSize = cbarFontSize;
+    [pathstr, name, ext] = fileparts(filename);
+    exportgraphics( ...
+        gca, ...
+        fullfile(pathstr, strrep(name, '_map', '_colorBar') + ext) ...
+    );
+    exportgraphics( ...
+        gca, ...
+        fullfile( ...
+            strrep(pathstr, 'png', 'eps'), ...
+            strrep(name, '_map', '_colorBar') + ".eps" ...
+        ) ...
+    );
+    close([f, colorfig]);
 end
 
 function createCombinedVisualizations(v_mean_RGB, histoVideoArtery, histoVideoVein, ...

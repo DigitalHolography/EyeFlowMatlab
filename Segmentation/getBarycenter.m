@@ -59,6 +59,15 @@ maskCRV = f_AVG_mean < (-CRACRV_Threshold * f_AVG_std);
 saveMaskImage(maskCRA, 'maskCRA.png')
 saveMaskImage(maskCRV, 'maskCRV.png')
 
+maskCRA2 = diskMask(numX, numY, 0.01, "center", [x_CRA/numX, y_CRA/numY] );
+maskCRV2 = diskMask(numX, numY, 0.01, "center", [x_CRV/numX, y_CRV/numY]  );
+
+saveMaskImage(maskCRA2, 'maskCRA2.png')
+saveMaskImage(maskCRV2, 'maskCRV2.png')
+
+ToolBox.Cache.maskCRA2 = maskCRA2;
+ToolBox.Cache.maskCRV2 = maskCRV2;
+
 xy_barycenter = round([x_CRV + x_CRA, y_CRV + y_CRA] / 2);
 xy_CRA = [x_CRA, y_CRA];
 xy_CRV = [x_CRV, y_CRV];

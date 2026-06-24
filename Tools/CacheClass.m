@@ -48,6 +48,9 @@ properties
     scoreMaskVein double % cached score mask vein
     maskChoroid logical % cached mask choroid
 
+    maskCRA2 logical
+    maskCRV2 logical
+
     % Diastolic and systolic indices
     sysIdxList double % cached systolic indices list
     sysIdx double % cached systolic index

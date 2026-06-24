@@ -29,6 +29,7 @@ arguments
     opt.xLineLabels = {}
     opt.zero_center = false
     opt.parent_folder = [];
+    opt.ylim = []  % Added ylim parameter
 end
 
 ToolBox = getGlobalToolBox;
@@ -101,10 +102,25 @@ axP = axis;
 axis tight
 axT = axis;
 
-if opt.zero_center
-    axis([axT(1), axT(2), 0, 1.07 * axP(4)])
+% Apply custom ylim if provided
+if ~isempty(opt.ylim)
+    if length(opt.ylim) == 2
+        axis([axT(1), axT(2), opt.ylim(1), opt.ylim(2)])
+    else
+        warning('ylim must be a 2-element vector [ymin ymax]. Using default limits.');
+        applyDefaultLimits;
+    end
 else
-    axis([axT(1), axT(2), axP(3), axP(4)])
+    applyDefaultLimits;
+end
+
+% Nested function to handle default limits
+function applyDefaultLimits
+    if opt.zero_center
+        axis([axT(1), axT(2), 0, 1.07 * axP(4)])
+    else
+        axis([axT(1), axT(2), axP(3), axP(4)])
+    end
 end
 
 set(gca, 'LineWidth', 2)
@@ -122,7 +138,5 @@ exportgraphics(gca, fullfile(ToolBox.path_png, ...
     sprintf("%s_%s_graph.png", ToolBox.folder_name, filename)))
 exportgraphics(gca, fullfile(ToolBox.path_eps, ...
     sprintf("%s_%s_graph.eps", ToolBox.folder_name, filename)))
-
-
 
 end
