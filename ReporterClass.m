@@ -51,15 +51,15 @@ methods
 
         if ~isempty(ToolBox.Output)
             fprintf("Saving Outputs to JSON...\n");
-            ToolBox.Output.writeJson(fullfile(ToolBox.path_json, sprintf("%s_output.json", ToolBox.folder_name)));
+            ToolBox.Output.writeJson(fullfile(ToolBox.path_json, sprintf("%s.json", ToolBox.folder_name)));
             disp("JSON output is done");
             fprintf("Saving Outputs to HDF5...\n");
-            ToolBox.Output.writeHdf5(fullfile(ToolBox.path_h5, sprintf("%s_output.h5", ToolBox.folder_name)));
+            ToolBox.Output.writeHdf5(fullfile(ToolBox.path_h5, sprintf("%s.h5", ToolBox.folder_name)));
             disp("H5 output is done");
         else
             DummyOutput = OutputClass();
-            DummyOutput.writeJson(fullfile(ToolBox.path_json, sprintf("%s_output.json", ToolBox.folder_name)));
-            DummyOutput.writeHdf5(fullfile(ToolBox.path_h5, sprintf("%s_output.h5", ToolBox.folder_name)));
+            DummyOutput.writeJson(fullfile(ToolBox.path_json, sprintf("%s.json", ToolBox.folder_name)));
+            DummyOutput.writeHdf5(fullfile(ToolBox.path_h5, sprintf("%s.h5", ToolBox.folder_name)));
         end
 
         fprintf("Saving Outputs took %ds\n", round(toc));
