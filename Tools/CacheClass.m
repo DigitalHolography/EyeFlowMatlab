@@ -3,7 +3,6 @@ classdef CacheClass < handle
 % Used for the handle
 
 properties (Transient)
-
     % Main Results
     vRMS single
     Q_results_A
@@ -17,17 +16,16 @@ properties (Transient)
     M0_ff single
     f_RMS single
     f_AVG single
+    bandRatio single
     displacementField
-
 end
 
 properties
 
-    % Main Results
-
     % Display Cache
     M0_ff_img single
-    M0_RGB double % cached mean image
+    bandRatio_img single
+    M0_RGB double
 
     % Time Vector
     t double %cached time vector

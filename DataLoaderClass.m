@@ -9,14 +9,14 @@ properties
     M1 single
     M2 single
     SH single
+    HF_M0 single
+    LF_M0 single
 end
 
 methods
 
     function obj = DataLoaderClass(selectedPath)
-        % selectedPath is the user-chosen folder (may be parent or HD folder)
         obj.directory = obj.cleanPath(selectedPath);
-        % Resolve to the actual data folder (e.g., *_HD subfolder)
         obj.directory = obj.resolveDataFolder(obj.directory);
         obj.filenames = obj.extractFilename(obj.directory);
         obj.loadData();
@@ -24,6 +24,7 @@ methods
 
     function delete(obj)
         obj.M0 = []; obj.M1 = []; obj.M2 = []; obj.SH = [];
+        obj.HF_M0 = []; obj.LF_M0 = [];
     end
 
 end
@@ -236,7 +237,6 @@ methods (Access = private)
     end
 
     function readHDF5(obj, h5Folder)
-        % h5Folder is the folder containing the .h5 file (may be 'raw' subfolder or main folder)
         h5_list = dir(fullfile(h5Folder, '*.h5'));
 
         if isempty(h5_list)
@@ -245,36 +245,33 @@ methods (Access = private)
 
         filepath = fullfile(h5Folder, h5_list(1).name);
         fprintf('    - Reading HDF5: %s\n', h5_list(1).name);
+
         info = h5info(filepath, '/');
         names = {info.Datasets.Name};
 
-        if ismember('moment0', names) || ismember('M0', names)
-            ds = intersect(names, {'moment0', 'M0'});
-            obj.M0 = squeeze(h5read(filepath, ['/' ds{1}]));
-        else
-            warning('M0 dataset not found');
+        obj.M0 = obj.readDataset(filepath, names, {'moment0', 'M0'});
+        obj.M1 = obj.readDataset(filepath, names, {'moment1', 'M1'});
+        obj.M2 = obj.readDataset(filepath, names, {'moment2', 'M2'});
+        obj.HF_M0 = obj.readDataset(filepath, names, {'HF_M0'});
+        obj.LF_M0 = obj.readDataset(filepath, names, {'LF_M0'});
+        obj.SH = obj.readDataset(filepath, names, {'SH'}, true); % silencieux si absent
+    end
+
+    function data = readDataset(~, filepath, names, candidates, silent)
+        if nargin < 5, silent = false; end
+        idx = find(ismember(names, candidates), 1);
+
+        if isempty(idx)
+            data = single([]);
+
+            if ~silent
+                warning('Dataset not found (tried: %s)', strjoin(candidates, ', '));
+            end
+
+            return;
         end
 
-        if ismember('moment1', names) || ismember('M1', names)
-            ds = intersect(names, {'moment1', 'M1'});
-            obj.M1 = squeeze(h5read(filepath, ['/' ds{1}]));
-        else
-            warning('M1 dataset not found');
-        end
-
-        if ismember('moment2', names) || ismember('M2', names)
-            ds = intersect(names, {'moment2', 'M2'});
-            obj.M2 = squeeze(h5read(filepath, ['/' ds{1}]));
-        else
-            warning('M2 dataset not found');
-        end
-
-        if ismember('SH', names)
-            obj.SH = squeeze(h5read(filepath, '/SH'));
-        else
-            fprintf('SH dataset not found');
-        end
-
+        data = single(squeeze(h5read(filepath, ['/' names{idx}])));
     end
 
 end

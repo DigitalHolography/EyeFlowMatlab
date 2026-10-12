@@ -3,20 +3,27 @@ classdef PreprocessorClass < handle
 
 properties
     is_preprocessed = false
-    M0_ff double
-    M0 double
-    M1 double
-    M2 double
-    SH double
-    f_RMS double
-    f_AVG double
+    M0_ff single
+    M0 single
+    M1 single
+    M2 single
+    SH single
+    HF_M0 single
+    LF_M0 single
+    bandRatio single
+    f_RMS single
+    f_AVG single
     directory char
     filenames char
     param_name char
     displacementField
-
     firstFrameIdx double
     lastFrameIdx double
+end
+
+properties (Constant)
+    % Cubes 3D (X,Y,T) qui suivent toutes les transformations
+    VideoFields = {'M0', 'M1', 'M2', 'M0_ff', 'f_AVG', 'f_RMS', 'HF_M0', 'LF_M0', 'bandRatio'}
 end
 
 methods
@@ -34,17 +41,16 @@ methods
         end
 
         params = Parameters_json(obj.directory, obj.param_name);
+        outDir = fullfile(obj.directory, 'eyeflow');
+        if ~isfolder(outDir), mkdir(outDir); end
 
-        obj.M0 = executionObj.M0;
-        obj.M1 = executionObj.M1;
-        obj.M2 = executionObj.M2;
-        obj.SH = executionObj.SH;
+        obj.loadFrom(executionObj);
 
-        % Execute preprocessing steps
         obj.register(params);
         obj.crop(params);
         obj.normalizeLocally(params);
         obj.resize(params);
+        obj.computeBandRatio(); % après resize : HF/LF ont suivi register/crop/resize
         obj.nonRigidRegister(params);
         obj.interpolate(params);
         obj.removeOutliers(params);
@@ -52,110 +58,109 @@ methods
         obj.is_preprocessed = true;
     end
 
+    function applyToVideos(obj, fcn, fields)
+        % Applique fcn à chaque cube non vide de la liste (défaut : VideoFields)
+        if nargin < 3, fields = obj.VideoFields; end
+
+        for k = 1:numel(fields)
+            f = fields{k};
+
+            if ~isempty(obj.(f))
+                obj.(f) = fcn(obj.(f));
+            end
+
+        end
+
+    end
+
 end
 
 methods (Access = private)
 
-    function register(obj, params)
-        firstFrame = params.json.Preprocess.Register.StartFrame;
-        lastFrame = params.json.Preprocess.Register.EndFrame;
-        enableRegistration = params.json.Preprocess.Register.Enable;
+    function loadFrom(obj, src)
 
-        if (firstFrame == 1) && (lastFrame == -1) || ~enableRegistration
-            return % do nothing if not required
+        for f = {'M0', 'M1', 'M2', 'SH', 'HF_M0', 'LF_M0'}
+            if isprop(src, f{1}), obj.(f{1}) = src.(f{1}); else, obj.(f{1}) = []; end
         end
 
-        tic
-        fprintf("    - Video Registering...\n");
-        % Rigid registration implementation
-        VideoRegistering(obj, firstFrame, lastFrame);
-        fprintf("    - Video Registration took: %ds\n", round(toc));
+        for f = {'M0_ff', 'f_AVG', 'f_RMS', 'bandRatio'} % remise à zéro si relance
+            obj.(f{1}) = [];
+        end
+
+    end
+
+    function computeBandRatio(obj)
+
+        if isempty(obj.HF_M0) || isempty(obj.LF_M0)
+            warning('HF_M0 or LF_M0 missing: band ratio not computed.');
+            return
+        end
+
+        if ~isequal(size(obj.HF_M0), size(obj.LF_M0))
+            error('HF_M0 and LF_M0 sizes differ.');
+        end
+
+        fprintf("    - Computing band ratio (HF_M0 / LF_M0)\n");
+        obj.bandRatio = obj.HF_M0 ./ max(obj.LF_M0, eps('single'));
+    end
+
+    function register(obj, params)
+        R = params.json.Preprocess.Register;
+
+        if (R.StartFrame == 1 && R.EndFrame == -1) || ~R.Enable
+            return
+        end
+
+        t = tic; fprintf("    - Video Registering...\n");
+        VideoRegistering(obj, R.StartFrame, R.EndFrame);
+        fprintf("    - Video Registration took: %.1fs\n", toc(t));
     end
 
     function crop(obj, params)
-
-        firstFrame = params.json.Preprocess.Crop.StartFrame;
-        lastFrame = params.json.Preprocess.Crop.EndFrame;
-
+        C = params.json.Preprocess.Crop;
         obj.firstFrameIdx = 1;
         obj.lastFrameIdx = size(obj.M0, 3);
 
-        if (firstFrame == 1) && (lastFrame == -1)
-            return % do nothing if not required
+        if C.StartFrame == 1 && C.EndFrame == -1
+            return
         end
 
-        tic
-        fprintf("    - Video Cropping...\n");
-        % Cropping implementation
-        [firstFrameOut, lastFrameOut] = VideoCropping(obj, firstFrame, lastFrame);
-
-        if firstFrameOut ~= firstFrame
-            obj.firstFrameIdx = firstFrameOut;
-        end
-
-        if lastFrameOut ~= lastFrame
-            obj.lastFrameIdx = lastFrameOut;
-        end
-
-        fprintf("    - Video Cropping took: %ds\n", round(toc));
+        t = tic; fprintf("    - Video Cropping...\n");
+        [obj.firstFrameIdx, obj.lastFrameIdx] = VideoCropping(obj, C.StartFrame, C.EndFrame);
+        fprintf("    - Video Cropping took: %.1fs\n", toc(t));
     end
 
     function normalizeLocally(obj, params)
-        tic
-        fprintf("    - Local Normalization...\n");
-        % Local normalization implementation
+        t = tic; fprintf("    - Local Normalization...\n");
         VideoNormalizingLocally(obj, params);
-        fprintf("    - Local Normalization took: %ds\n", round(toc));
+        fprintf("    - Local Normalization took: %.1fs\n", toc(t));
     end
 
     function resize(obj, params)
-        tic
-        fprintf("    - Video Resizing...\n");
-        % Resizing implementation
+        t = tic; fprintf("    - Video Resizing...\n");
         VideoResizing(obj, params);
-        fprintf("    - Video Resizing took: %ds\n", round(toc));
+        fprintf("    - Video Resizing took: %.1fs\n", toc(t));
     end
 
     function nonRigidRegister(obj, params)
-
-        if ~params.json.Preprocess.NonRigidRegisteringFlag
-            return
-        end
-
-        apply = params.json.Preprocess.NonRigidRegisteringApply;
-
-        tic
-        fprintf("    - Video Non-Rigid Registration...\n");
-        % Non-rigid registration implementation
-        VideoNonRigidRegistering(obj, apply);
-        fprintf("    - Video Non-Rigid Registration took: %ds\n", round(toc));
+        if ~params.json.Preprocess.NonRigidRegisteringFlag, return, end
+        t = tic; fprintf("    - Video Non-Rigid Registration...\n");
+        VideoNonRigidRegistering(obj, params.json.Preprocess.NonRigidRegisteringApply);
+        fprintf("    - Video Non-Rigid Registration took: %.1fs\n", toc(t));
     end
 
     function interpolate(obj, params)
-        kInterp = params.json.Preprocess.InterpolationFactor;
-
-        if kInterp == 0
-            return
-        end
-
-        tic
-        fprintf("    - Video Interpolating...\n");
-        % Interpolation implementation
+        if params.json.Preprocess.InterpolationFactor == 0, return, end
+        t = tic; fprintf("    - Video Interpolating...\n");
         VideoInterpolating(obj, params);
-        fprintf("    - Video Interpolation took: %ds\n", round(toc));
+        fprintf("    - Video Interpolation took: %.1fs\n", toc(t));
     end
 
     function removeOutliers(obj, params)
-
-        if ~params.json.Preprocess.RemoveOutliersFlag
-            return
-        end
-
-        tic
-        fprintf("    - Video Outlier Removal...\n");
-        % Outlier removal implementation
+        if ~params.json.Preprocess.RemoveOutliersFlag, return, end
+        t = tic; fprintf("    - Video Outlier Removal...\n");
         VideoRemoveOutliers(obj, params);
-        fprintf("    - Video Outlier Removal took: %ds\n", round(toc));
+        fprintf("    - Video Outlier Removal took: %.1fs\n", toc(t));
     end
 
 end

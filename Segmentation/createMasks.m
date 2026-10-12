@@ -274,35 +274,54 @@ if (mask_params.RegisteredMasks == -1 || mask_params.RegisteredMasks == 1)
 end
 
 % 3) 2) b) Force Create Masks in case they exist
+% Dossiers de recherche (par ordre de priorité) :
+%   1. Mask.ExtraMaskFolder (optionnel, dans le JSON)
+%   2. <EF_path>/mask
+%   3. <dossier parent>/eyeflow/mask  (ex. ...\260113_AUZ0752_1\eyeflow\mask)
+maskFolders = {};
+
+if isfield(mask_params, 'ExtraMaskFolder') && ~isempty(mask_params.ExtraMaskFolder)
+    maskFolders{end + 1} = char(mask_params.ExtraMaskFolder);
+end
+
+maskFolders{end + 1} = fullfile(path, 'mask');
+rootDir = fileparts(regexprep(char(path), '[\\/]+$', ''));
+maskFolders{end + 1} = fullfile(rootDir, 'eyeflow', 'mask');
+
+% Noms acceptés (le premier trouvé gagne)
+artery_names = {'forceMaskArtery.png', 'retinal_artery_mask_clean.png'};
+vein_names = {'forceMaskVein.png', 'retinal_vein_mask_clean.png'};
+choroid_names = {'maskChoroid.png', 'choroidal_vessel_mask.png'};
+
 if (mask_params.ForcedMasks == -1 || mask_params.ForcedMasks == 1)
 
-    if isfile(fullfile(path, 'mask', 'forceMaskArtery.png'))
-        maskArtery = mat2gray(mean(imread(fullfile(path, 'mask', 'forceMaskArtery.png')), 3)) > 0;
+    fileArtery = findMaskFile(maskFolders, artery_names);
 
-        if size(maskArtery, 1) ~= maskCircle
-            maskArtery = imresize(maskArtery, [numX, numY], "nearest");
-        end
-
+    if ~isempty(fileArtery)
+        fprintf("Forced artery mask: %s\n", fileArtery);
+        maskArtery = readMaskFile(fileArtery, numX, numY);
     elseif mask_params.ForcedMasks == 1
-        error("Cannot force Artery Mask because none given in the mask folder. Please create a forceMaskArtery.png file in the mask folder. (SET ForcedMasks to -1 to skip use the auto mask)");
+        error("Cannot force Artery Mask because none found. Looked for %s in: %s. (SET ForcedMasks to -1 to use the auto mask)", ...
+            strjoin(artery_names, ', '), strjoin(maskFolders, ' | '));
     end
 
-    if isfile(fullfile(path, 'mask', 'forceMaskVein.png'))
-        maskVein = mat2gray(mean(imread(fullfile(path, 'mask', 'forceMaskVein.png')), 3)) > 0;
+    fileVein = findMaskFile(maskFolders, vein_names);
 
-        if size(maskVein, 1) ~= maskCircle
-            maskVein = imresize(maskVein, [numX, numY], "nearest");
-        end
-
+    if ~isempty(fileVein)
+        fprintf("Forced vein mask: %s\n", fileVein);
+        maskVein = readMaskFile(fileVein, numX, numY);
     elseif mask_params.ForcedMasks == 1
-        error("Cannot force Vein Mask because none given in the mask folder. Please create a forceMaskVein.png file in the mask folder. (SET ForcedMasks to -1 to skip use the auto mask)");
+        error("Cannot force Vein Mask because none found. Looked for %s in: %s. (SET ForcedMasks to -1 to use the auto mask)", ...
+            strjoin(vein_names, ', '), strjoin(maskFolders, ' | '));
     end
 
 end
 
-if isfile(fullfile(path, 'mask', 'maskChoroid.png'))
-    maskChoroid = mat2gray(mean(imread(fullfile(path, 'mask', 'maskChoroid.png')), 3)) > 0;
+fileChoroid = findMaskFile(maskFolders, choroid_names);
 
+if ~isempty(fileChoroid)
+    fprintf("Choroid mask: %s\n", fileChoroid);
+    maskChoroid = readMaskFile(fileChoroid, numX, numY);
 end
 
 % 3) 3) Segmentation Scores Calculation
@@ -412,5 +431,43 @@ ToolBox.Cache.M0_RGB = M0_RGB;
 ToolBox.Cache.scoreMaskArtery = scoreMaskArtery;
 ToolBox.Cache.scoreMaskVein = scoreMaskVein;
 
+% 6) Corrélation band ratio / signaux artériel, veineux, choroïdien
+if ~isempty(ToolBox.Cache.bandRatio)
+    bandRatioCorrelation(M0_ff, ToolBox.Cache.bandRatio, ...
+        maskArtery, maskVein, maskChoroid, maskDomain = maskDiaphragm);
+else
+    warning('Band ratio not available: correlation maps skipped.');
+end
+
 close all
+end
+
+function file = findMaskFile(folders, names)
+% Retourne le premier fichier existant (dossiers puis noms), sinon ''
+file = '';
+
+for i = 1:numel(folders)
+
+    for j = 1:numel(names)
+        candidate = fullfile(folders{i}, names{j});
+
+        if isfile(candidate)
+            file = candidate;
+            return
+        end
+
+    end
+
+end
+
+end
+
+function m = readMaskFile(file, numX, numY)
+% Lit un masque PNG en binaire et le redimensionne à la taille du cube
+m = mat2gray(mean(imread(file), 3)) > 0;
+
+if ~isequal(size(m), [numX, numY])
+    m = imresize(m, [numX, numY], "nearest");
+end
+
 end

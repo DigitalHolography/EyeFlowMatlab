@@ -20,6 +20,8 @@ properties
     M1 single
     M2 single
     SH single
+    HF_M0 single
+    LF_M0 single
 
     % AI Networks
     AINetworks AINetworksClass
@@ -73,6 +75,8 @@ methods
         obj.M1 = DataLoader.M1;
         obj.M2 = DataLoader.M2;
         obj.SH = DataLoader.SH;
+        obj.HF_M0 = DataLoader.HF_M0;
+        obj.LF_M0 = DataLoader.LF_M0;
         clear DataLoader;
 
         % Locate parameter JSON files – start from originalPath (user‑selected folder)
@@ -115,14 +119,18 @@ methods
         obj.Cache.M0_ff_img = squeeze(mean(obj.Cache.M0_ff, 3));
         obj.Cache.f_RMS = Preprocessor.f_RMS;
         obj.Cache.f_AVG = Preprocessor.f_AVG;
+
+        if ~isempty(Preprocessor.bandRatio)
+            obj.Cache.bandRatio = Preprocessor.bandRatio;
+            obj.Cache.bandRatio_img = squeeze(mean(obj.Cache.bandRatio, 3, 'omitnan'));
+        end
+
         obj.Cache.displacementField = Preprocessor.displacementField;
         obj.is_preprocessed = Preprocessor.is_preprocessed;
 
         % Free memory
-        obj.M0 = [];
-        obj.M1 = [];
-        obj.M2 = [];
-        obj.SH = [];
+        obj.M0 = []; obj.M1 = []; obj.M2 = []; obj.SH = [];
+        obj.HF_M0 = []; obj.LF_M0 = [];
         clear Preprocessor;
 
         fprintf("- Preprocess took : %ds\n", round(toc(PreProcessTimer)));
