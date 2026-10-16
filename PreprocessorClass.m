@@ -90,7 +90,6 @@ methods (Access = private)
     end
 
     function computeBandRatio(obj)
-
         if isempty(obj.HF_M0) || isempty(obj.LF_M0)
             warning('HF_M0 or LF_M0 missing: band ratio not computed.');
             return
@@ -100,8 +99,24 @@ methods (Access = private)
             error('HF_M0 and LF_M0 sizes differ.');
         end
 
-        fprintf("    - Computing band ratio (HF_M0 / LF_M0)\n");
-        obj.bandRatio = obj.HF_M0 ./ max(obj.LF_M0, eps('single'));
+        fprintf("    - Computing band ratio (HoloDoppler convention)\n");
+
+        % Rapport HF/LF, sans seuillage du dénominateur :
+        % même convention que dans HoloDoppler/energy_ratio.m.
+        ratio = obj.HF_M0 ./ obj.LF_M0;
+
+        % Même masque que diskMask(nCols, nRows, 1) dans HoloDoppler.
+        % Construction locale pour ne pas dépendre de diskMask.
+        [nRows, nCols, ~] = size(ratio);
+        [X, Y] = meshgrid(linspace(0, 1, nCols), ...
+            linspace(0, 1, nRows));
+        disk = 4 .* ((X - 0.5).^2 + (Y - 0.5).^2) <= 1;
+
+        % Offset spatial calculé séparément pour chaque frame.
+        % Attention : moyenne sur TOUS les pixels, avec zéro dans le disque.
+        R0 = mean((~disk) .* ratio, [1 2]);
+
+        obj.bandRatio = ratio - R0;
     end
 
     function register(obj, params)
