@@ -1,7 +1,9 @@
 function VideoInterpolating(obj, params)
 k = params.json.Preprocess.InterpolationFactor;
 fprintf('        - Interpolating data cube (factor 2^%d)\n', k);
-obj.applyToVideos(@(v) interpFrames(v, k), {'M0_ff', 'f_AVG', 'f_RMS', 'bandRatio'});
+obj.applyToVideos(@(v) interpFrames(v, k), ...
+    {'M0_ff', 'f_AVG', 'f_RMS', ...
+     'HF_M0', 'LF_M0', 'bandRatio'});
 end
 
 function out = interpFrames(v, k)

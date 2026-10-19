@@ -119,6 +119,8 @@ methods
         obj.Cache.M0_ff_img = squeeze(mean(obj.Cache.M0_ff, 3));
         obj.Cache.f_RMS = Preprocessor.f_RMS;
         obj.Cache.f_AVG = Preprocessor.f_AVG;
+        obj.Cache.HF_M0 = Preprocessor.HF_M0;
+        obj.Cache.LF_M0 = Preprocessor.LF_M0;
 
         if ~isempty(Preprocessor.bandRatio)
             obj.Cache.bandRatio = Preprocessor.bandRatio;

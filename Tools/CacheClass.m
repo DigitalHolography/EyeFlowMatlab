@@ -16,6 +16,8 @@ properties (Transient)
     M0_ff single
     f_RMS single
     f_AVG single
+    HF_M0 single
+    LF_M0 single
     bandRatio single
     displacementField
 end
