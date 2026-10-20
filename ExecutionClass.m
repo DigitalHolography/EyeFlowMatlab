@@ -68,7 +68,8 @@ methods
         % Load data using DataLoader (resolves subfolders automatically)
         DataLoader = DataLoaderClass(dataPath);
 
-        % Copy loaded data
+        % Copy loaded data.
+        % Keep DataLoader alive until SH_avg has been copied to the Cache.
         obj.directory = DataLoader.directory;
         obj.filenames = DataLoader.filenames;
         obj.M0 = DataLoader.M0;
@@ -77,7 +78,6 @@ methods
         obj.SH = DataLoader.SH;
         obj.HF_M0 = DataLoader.HF_M0;
         obj.LF_M0 = DataLoader.LF_M0;
-        clear DataLoader;
 
         % Locate parameter JSON files – start from originalPath (user‑selected folder)
         paramSearchDir = originalPath;
@@ -95,9 +95,32 @@ methods
 
         obj.param_name = obj.params_names{1};
 
-        % Initialise output, cache, and analyser
+        % Initialise output and cache.
         obj.Output = OutputClass();
         obj.Cache = CacheClass();
+
+        % Preserve the input spectrum independently of video preprocessing.
+        obj.Cache.SH_avg = DataLoader.SH_avg;
+        obj.Cache.SH_avg_sourceFile = DataLoader.SH_avg_sourceFile;
+        obj.Cache.SH_avg_datasetPath = DataLoader.SH_avg_datasetPath;
+        obj.Cache.SH_avg_info = DataLoader.SH_avg_info;
+
+        if isempty(obj.Cache.SH_avg)
+            fprintf('    - SH_avg not available: spectral cache is empty\n');
+        else
+            fprintf('    - SH_avg cached: %s\n', ...
+                mat2str(size(obj.Cache.SH_avg)));
+
+            fprintf('      Source: %s\n', ...
+                obj.Cache.SH_avg_sourceFile);
+
+            fprintf('      Dataset: %s\n', ...
+                obj.Cache.SH_avg_datasetPath);
+        end
+
+        clear DataLoader;
+
+        % Initialise analyser with the populated cache.
         obj.Analyzer = AnalyzerClass(obj.Cache);
 
         % Load the actual parameters (creates global variable)
@@ -128,11 +151,27 @@ methods
         end
 
         obj.Cache.displacementField = Preprocessor.displacementField;
+
+        % Match the final spatial resolution used by segmentation.
+        % This does not perform spatial registration.
+        targetSpatialSize = [
+                             size(obj.Cache.M0_ff, 1), ...
+                                 size(obj.Cache.M0_ff, 2)
+                             ];
+
+        obj.Cache.resizeSHAvg(targetSpatialSize);
+
         obj.is_preprocessed = Preprocessor.is_preprocessed;
 
-        % Free memory
-        obj.M0 = []; obj.M1 = []; obj.M2 = []; obj.SH = [];
-        obj.HF_M0 = []; obj.LF_M0 = [];
+        % Free memory.
+        obj.M0 = [];
+        obj.M1 = [];
+        obj.M2 = [];
+        obj.SH = [];
+
+        obj.HF_M0 = [];
+        obj.LF_M0 = [];
+
         clear Preprocessor;
 
         fprintf("- Preprocess took : %ds\n", round(toc(PreProcessTimer)));

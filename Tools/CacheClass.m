@@ -20,6 +20,9 @@ properties (Transient)
     LF_M0 single
     bandRatio single
     displacementField
+
+    % Input spectral data, preserved without preprocessing.
+    SH_avg single
 end
 
 properties
@@ -82,6 +85,15 @@ properties
 
     % Womersley things
     WomersleyOut cell
+
+    % SH_avg provenance
+    SH_avg_sourceFile char = ''
+    SH_avg_datasetPath char = ''
+    SH_avg_info struct = struct()
+    % Analysis regions in the spatial reference of M0_ff.
+    SH_avg_masks struct = struct()
+    SH_avg_colors struct = struct()
+    SH_avg_maskDomain logical
 
 end
 
@@ -150,6 +162,54 @@ methods
         end
 
         [obj.fN, obj.f] = frequency_array(ToolBox);
+    end
+
+    function resizeSHAvg(obj, targetSize)
+        % Resize only the two spatial dimensions of SH_avg.
+        % The spectral dimension is preserved.
+        %
+        % Assumes that SH_avg and the target image cover the same field
+        % with the same orientation and spatial reference.
+
+        if isempty(obj.SH_avg)
+            return
+        end
+
+        validateattributes(targetSize, {'numeric'}, ...
+            {'vector', 'numel', 2, 'integer', 'positive', 'finite'}, ...
+            'CacheClass.resizeSHAvg', 'targetSize');
+
+        targetSize = double(targetSize(:).');
+
+        sourceSize = [
+                      size(obj.SH_avg, 1), ...
+                          size(obj.SH_avg, 2)
+                      ];
+
+        if isequal(sourceSize, targetSize)
+            fprintf('    - SH_avg already at target spatial size: %s\n', ...
+                mat2str(targetSize));
+            return
+        end
+
+        numFreq = size(obj.SH_avg, 3);
+
+        fprintf('    - Resizing SH_avg: %s -> %s, %d frequency bins\n', ...
+            mat2str(sourceSize), mat2str(targetSize), numFreq);
+
+        resized = zeros( ...
+            targetSize(1), targetSize(2), numFreq, ...
+            'like', obj.SH_avg);
+
+        for k = 1:numFreq
+            resized(:, :, k) = imresize( ...
+                obj.SH_avg(:, :, k), ...
+                targetSize, ...
+                'bilinear', ...
+                'Antialiasing', true);
+        end
+
+        obj.SH_avg = resized;
     end
 
 end
