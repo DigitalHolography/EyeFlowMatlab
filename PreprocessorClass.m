@@ -1,29 +1,61 @@
 classdef PreprocessorClass < handle
-% Handles all preprocessing operations
+% Handles preprocessing operations.
+%
+% gaussian_w:
+%   Input cube loaded from ExecutionClass.
+%   Expected layout: X x Y x T, identical to M0.
+%   Included in VideoFields for shared preprocessing operations.
+%   No moment normalization, square root or unit conversion is applied.
+%
+% f_RMS:
+%   Still computed independently by VideoNormalizingLocally.
+%
+% Important:
+%   Preprocessing helpers must use applyToVideos / VideoFields, or
+%   explicitly include gaussian_w in their own field lists.
 
 properties
     is_preprocessed = false
+
     M0_ff single
     M0 single
     M1 single
     M2 single
+
     SH single
+
     HF_M0 single
     LF_M0 single
     bandRatio single
+
     f_RMS single
     f_AVG single
+
+    gaussian_w single
+
     directory char
     filenames char
     param_name char
+
     displacementField
+
     firstFrameIdx double
     lastFrameIdx double
 end
 
 properties (Constant)
-    % Cubes 3D (X,Y,T) qui suivent toutes les transformations
-    VideoFields = {'M0', 'M1', 'M2', 'M0_ff', 'f_AVG', 'f_RMS', 'HF_M0', 'LF_M0', 'bandRatio'}
+    % X x Y x T cubes processed by applyToVideos.
+    VideoFields = { ...
+                       'M0', ...
+                       'M1', ...
+                       'M2', ...
+                       'M0_ff', ...
+                       'f_AVG', ...
+                       'f_RMS', ...
+                       'HF_M0', ...
+                       'LF_M0', ...
+                       'bandRatio', ...
+                   'gaussian_w'}
 end
 
 methods
@@ -35,38 +67,87 @@ methods
     end
 
     function preprocess(obj, executionObj)
+        obj.is_preprocessed = false;
+
+        if isempty(executionObj.M0)
+            error('PreprocessorClass:MissingM0', ...
+            'M0 input data are empty.');
+        end
 
         if any(isnan(executionObj.M0), 'all')
-            error('NaN values found in M0 data. Please check the input file.');
+            error('PreprocessorClass:NaNInM0', ...
+            'NaN values found in M0 data. Please check the input file.');
         end
 
         params = Parameters_json(obj.directory, obj.param_name);
+
         outDir = fullfile(obj.directory, 'eyeflow');
-        if ~isfolder(outDir), mkdir(outDir); end
+
+        if ~isfolder(outDir)
+            mkdir(outDir);
+        end
 
         obj.loadFrom(executionObj);
+        obj.validateGaussianW('input');
+
+        if isempty(obj.gaussian_w)
+            fprintf('    - gaussian_w not available: preprocessing moments only.\n');
+        else
+            fprintf('    - gaussian_w input size: %s\n', ...
+                mat2str(size(obj.gaussian_w)));
+
+            obj.reportGaussianWValidity();
+        end
 
         obj.register(params);
+        obj.validateGaussianW('registration');
+
         obj.crop(params);
+        obj.validateGaussianW('cropping');
+
+        % Computes f_AVG, f_RMS and M0_ff from the moments.
+        % gaussian_w must remain unchanged by this normalization.
         obj.normalizeLocally(params);
+        obj.validateGaussianW('local normalization');
+
         obj.resize(params);
-        obj.computeBandRatio(); % après resize : HF/LF ont suivi register/crop/resize
+        obj.validateGaussianW('resizing');
+
+        % HF_M0 and LF_M0 have followed register/crop/resize.
+        obj.computeBandRatio();
+
         obj.nonRigidRegister(params);
+        obj.validateGaussianW('non-rigid registration');
+
         obj.interpolate(params);
+        obj.validateGaussianW('interpolation');
+
         obj.removeOutliers(params);
+        obj.validateGaussianW('outlier removal');
+
+        if ~isempty(obj.gaussian_w)
+            fprintf('    - gaussian_w output size: %s\n', ...
+                mat2str(size(obj.gaussian_w)));
+        end
 
         obj.is_preprocessed = true;
     end
 
     function applyToVideos(obj, fcn, fields)
-        % Applique fcn à chaque cube non vide de la liste (défaut : VideoFields)
-        if nargin < 3, fields = obj.VideoFields; end
+        % Apply the same operation to each nonempty video cube.
+        %
+        % Default:
+        %   Process every field listed in VideoFields.
+
+        if nargin < 3
+            fields = obj.VideoFields;
+        end
 
         for k = 1:numel(fields)
-            f = fields{k};
+            fieldName = fields{k};
 
-            if ~isempty(obj.(f))
-                obj.(f) = fcn(obj.(f));
+            if ~isempty(obj.(fieldName))
+                obj.(fieldName) = fcn(obj.(fieldName));
             end
 
         end
@@ -78,42 +159,143 @@ end
 methods (Access = private)
 
     function loadFrom(obj, src)
+        % Input data, including the already fitted Gaussian width.
+        inputFields = { ...
+                           'M0', ...
+                           'M1', ...
+                           'M2', ...
+                           'SH', ...
+                           'HF_M0', ...
+                           'LF_M0', ...
+                       'gaussian_w'};
 
-        for f = {'M0', 'M1', 'M2', 'SH', 'HF_M0', 'LF_M0'}
-            if isprop(src, f{1}), obj.(f{1}) = src.(f{1}); else, obj.(f{1}) = []; end
+        for k = 1:numel(inputFields)
+            fieldName = inputFields{k};
+
+            if isprop(src, fieldName)
+                obj.(fieldName) = src.(fieldName);
+            else
+                obj.(fieldName) = [];
+            end
+
         end
 
-        for f = {'M0_ff', 'f_AVG', 'f_RMS', 'bandRatio'} % remise à zéro si relance
-            obj.(f{1}) = [];
+        % Derived data must be recomputed on every run.
+        derivedFields = { ...
+                             'M0_ff', ...
+                             'f_AVG', ...
+                             'f_RMS', ...
+                         'bandRatio'};
+
+        for k = 1:numel(derivedFields)
+            obj.(derivedFields{k}) = [];
+        end
+
+        obj.displacementField = [];
+        obj.firstFrameIdx = [];
+        obj.lastFrameIdx = [];
+    end
+
+    function validateGaussianW(obj, stage)
+        % Missing gaussian_w is allowed for conventional RMS processing.
+        if isempty(obj.gaussian_w)
+            return
+        end
+
+        if ~isreal(obj.gaussian_w)
+            error('PreprocessorClass:ComplexGaussianW', ...
+                'gaussian_w must be real after %s.', ...
+                stage);
+        end
+
+        if ndims(obj.gaussian_w) > 3
+            error('PreprocessorClass:InvalidGaussianWDimensions', ...
+                ['gaussian_w must have layout X x Y x T after %s. ', ...
+             'Received size: %s.'], ...
+                stage, mat2str(size(obj.gaussian_w)));
+        end
+
+        if ~isempty(obj.f_RMS)
+
+            if ~isequal(size(obj.gaussian_w), size(obj.f_RMS))
+                error('PreprocessorClass:GaussianWRMSSizeMismatch', ...
+                    ['After %s, gaussian_w and f_RMS must have ', ...
+                 'identical sizes. gaussian_w: %s; f_RMS: %s.'], ...
+                    stage, ...
+                    mat2str(size(obj.gaussian_w)), ...
+                    mat2str(size(obj.f_RMS)));
+            end
+
+        end
+
+        if ~isempty(obj.M0_ff)
+
+            if ~isequal(size(obj.gaussian_w), size(obj.M0_ff))
+                error('PreprocessorClass:GaussianWM0FFSizeMismatch', ...
+                    ['After %s, gaussian_w and M0_ff must have ', ...
+                 'identical sizes. gaussian_w: %s; M0_ff: %s.'], ...
+                    stage, ...
+                    mat2str(size(obj.gaussian_w)), ...
+                    mat2str(size(obj.M0_ff)));
+            end
+
+        end
+
+    end
+
+    function reportGaussianWValidity(obj)
+        invalidCount = nnz(~isfinite(obj.gaussian_w));
+
+        negativeCount = nnz( ...
+            isfinite(obj.gaussian_w) & obj.gaussian_w < 0);
+
+        if invalidCount > 0
+            warning('PreprocessorClass:NonFiniteGaussianW', ...
+                ['gaussian_w contains %d nonfinite values (NaN or Inf). ', ...
+                 'No automatic replacement is applied. ', ...
+                 'Handle invalid fits before using this cube for analysis; ', ...
+             'interpolation or filtering may propagate these values.'], ...
+                invalidCount);
+        end
+
+        if negativeCount > 0
+            warning('PreprocessorClass:NegativeGaussianW', ...
+                ['gaussian_w contains %d finite negative values. ', ...
+                 'No clipping or absolute value is applied. ', ...
+             'Check fit validity and the width convention.'], ...
+                negativeCount);
         end
 
     end
 
     function computeBandRatio(obj)
+
         if isempty(obj.HF_M0) || isempty(obj.LF_M0)
-            warning('HF_M0 or LF_M0 missing: band ratio not computed.');
+            warning('PreprocessorClass:MissingBandData', ...
+            'HF_M0 or LF_M0 missing: band ratio not computed.');
             return
         end
 
         if ~isequal(size(obj.HF_M0), size(obj.LF_M0))
-            error('HF_M0 and LF_M0 sizes differ.');
+            error('PreprocessorClass:BandDataSizeMismatch', ...
+            'HF_M0 and LF_M0 sizes differ.');
         end
 
         fprintf("    - Computing band ratio (HoloDoppler convention)\n");
 
-        % Rapport HF/LF, sans seuillage du dénominateur :
-        % même convention que dans HoloDoppler/energy_ratio.m.
+        % Preserve the existing HF/LF convention.
         ratio = obj.HF_M0 ./ obj.LF_M0;
 
-        % Même masque que diskMask(nCols, nRows, 1) dans HoloDoppler.
-        % Construction locale pour ne pas dépendre de diskMask.
         [nRows, nCols, ~] = size(ratio);
-        [X, Y] = meshgrid(linspace(0, 1, nCols), ...
-            linspace(0, 1, nRows));
-        disk = 4 .* ((X - 0.5).^2 + (Y - 0.5).^2) <= 1;
 
-        % Offset spatial calculé séparément pour chaque frame.
-        % Attention : moyenne sur TOUS les pixels, avec zéro dans le disque.
+        [X, Y] = meshgrid( ...
+            linspace(0, 1, nCols), ...
+            linspace(0, 1, nRows));
+
+        disk = 4 .* ((X - 0.5) .^ 2 + (Y - 0.5) .^ 2) <= 1;
+
+        % Spatial offset computed separately for each frame.
+        % Mean over all pixels, with zeros inside the disk.
         R0 = mean((~disk) .* ratio, [1 2]);
 
         obj.bandRatio = ratio - R0;
@@ -126,13 +308,19 @@ methods (Access = private)
             return
         end
 
-        t = tic; fprintf("    - Video Registering...\n");
+        timer = tic;
+
+        fprintf("    - Video Registering...\n");
+
         VideoRegistering(obj, R.StartFrame, R.EndFrame);
-        fprintf("    - Video Registration took: %.1fs\n", toc(t));
+
+        fprintf("    - Video Registration took: %.1fs\n", ...
+            toc(timer));
     end
 
     function crop(obj, params)
         C = params.json.Preprocess.Crop;
+
         obj.firstFrameIdx = 1;
         obj.lastFrameIdx = size(obj.M0, 3);
 
@@ -140,42 +328,88 @@ methods (Access = private)
             return
         end
 
-        t = tic; fprintf("    - Video Cropping...\n");
-        [obj.firstFrameIdx, obj.lastFrameIdx] = VideoCropping(obj, C.StartFrame, C.EndFrame);
-        fprintf("    - Video Cropping took: %.1fs\n", toc(t));
+        timer = tic;
+
+        fprintf("    - Video Cropping...\n");
+
+        [obj.firstFrameIdx, obj.lastFrameIdx] = ...
+            VideoCropping(obj, C.StartFrame, C.EndFrame);
+
+        fprintf("    - Video Cropping took: %.1fs\n", ...
+            toc(timer));
     end
 
     function normalizeLocally(obj, params)
-        t = tic; fprintf("    - Local Normalization...\n");
+        timer = tic;
+
+        fprintf("    - Local Normalization...\n");
+
+        % Existing helper computes f_RMS from M2 / Mnorm.
+        % gaussian_w is already a fitted width and is not normalized here.
         VideoNormalizingLocally(obj, params);
-        fprintf("    - Local Normalization took: %.1fs\n", toc(t));
+
+        fprintf("    - Local Normalization took: %.1fs\n", ...
+            toc(timer));
     end
 
     function resize(obj, params)
-        t = tic; fprintf("    - Video Resizing...\n");
+        timer = tic;
+
+        fprintf("    - Video Resizing...\n");
+
         VideoResizing(obj, params);
-        fprintf("    - Video Resizing took: %.1fs\n", toc(t));
+
+        fprintf("    - Video Resizing took: %.1fs\n", ...
+            toc(timer));
     end
 
     function nonRigidRegister(obj, params)
-        if ~params.json.Preprocess.NonRigidRegisteringFlag, return, end
-        t = tic; fprintf("    - Video Non-Rigid Registration...\n");
-        VideoNonRigidRegistering(obj, params.json.Preprocess.NonRigidRegisteringApply);
-        fprintf("    - Video Non-Rigid Registration took: %.1fs\n", toc(t));
+
+        if ~params.json.Preprocess.NonRigidRegisteringFlag
+            return
+        end
+
+        timer = tic;
+
+        fprintf("    - Video Non-Rigid Registration...\n");
+
+        VideoNonRigidRegistering( ...
+            obj, params.json.Preprocess.NonRigidRegisteringApply);
+
+        fprintf("    - Video Non-Rigid Registration took: %.1fs\n", ...
+            toc(timer));
     end
 
     function interpolate(obj, params)
-        if params.json.Preprocess.InterpolationFactor == 0, return, end
-        t = tic; fprintf("    - Video Interpolating...\n");
+
+        if params.json.Preprocess.InterpolationFactor == 0
+            return
+        end
+
+        timer = tic;
+
+        fprintf("    - Video Interpolating...\n");
+
         VideoInterpolating(obj, params);
-        fprintf("    - Video Interpolation took: %.1fs\n", toc(t));
+
+        fprintf("    - Video Interpolation took: %.1fs\n", ...
+            toc(timer));
     end
 
     function removeOutliers(obj, params)
-        if ~params.json.Preprocess.RemoveOutliersFlag, return, end
-        t = tic; fprintf("    - Video Outlier Removal...\n");
+
+        if ~params.json.Preprocess.RemoveOutliersFlag
+            return
+        end
+
+        timer = tic;
+
+        fprintf("    - Video Outlier Removal...\n");
+
         VideoRemoveOutliers(obj, params);
-        fprintf("    - Video Outlier Removal took: %.1fs\n", toc(t));
+
+        fprintf("    - Video Outlier Removal took: %.1fs\n", ...
+            toc(timer));
     end
 
 end

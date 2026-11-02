@@ -1,4 +1,4 @@
-function [v_video_RGB, v_mean_RGB] = flowMap(v_video, maskSection, maskArtery, maskVein, M0_ff, xy_barycenter)
+function [v_video_RGB, v_mean_RGB] = flowMap(v_video, f_video, maskSection, maskArtery, maskVein, xy_barycenter)
 % Generate flow map images and videos for blood flow velocity analysis
 %
 % inputs:
@@ -6,7 +6,6 @@ function [v_video_RGB, v_mean_RGB] = flowMap(v_video, maskSection, maskArtery, m
 %   maskSection: 2D logical array defining the section of interest
 %   maskArtery: 2D logical array defining artery regions
 %   maskVein: 2D logical array defining vein regions
-%   M0_ff: 3D array of preprocessed image data (X x Y x Frames)
 %   xy_barycenter: 1x2 array defining the center coordinates [x, y]
 %
 % outputs:
@@ -17,10 +16,17 @@ ToolBox = getGlobalToolBox;
 params = ToolBox.getParams;
 exportVideos = params.exportVideos;
 
-% Rescale once
-M0_ff = rescale(M0_ff);
-M0_ff_image = rescale(mean(M0_ff, 3));
 [numX, numY, numFrames] = size(v_video);
+
+% Display copies only: do not modify cached measurement data.
+M0_display = improveDisplayContrast( ...
+    f_video, ...
+    diameterRatio = 0.90, ...
+    gamma = 1, ...
+    perFrame = false, ...
+    blankOutside = false);
+
+M0_mean_display = mean(f_video, 3, 'omitnan');
 
 % Precompute constants
 x_c = xy_barycenter(1) / numX;
@@ -65,14 +71,24 @@ velocityColorbar(cmapArtery, v_min, v_max, 'v_Artery');
 velocityColorbar(cmapVein, v_min, v_max, 'v_Vein');
 
 % Average Image
-v_mean_RGB = flowMapImg(v_mean_rescaled, {maskArtery, maskVein, maskAV}, {cmapArtery, cmapVein, cmapAV}, background = M0_ff_image, circles = circles);
+v_mean_RGB = flowMapImg( ...
+    rescale(v_mean_rescaled), ...
+    {maskArtery, maskVein, maskAV}, ...
+    {cmapArtery, cmapVein, cmapAV}, ...
+    background = rescale(M0_mean_display), ...
+    circles = circles);
 imwrite(v_mean_RGB, fullfile(ToolBox.path_png, sprintf("%s_%s", ToolBox.folder_name, 'v_map.png')))
 
 % Gif frame generation
 if exportVideos
 
     parfor frameIdx = 1:numFrames
-        v_video_RGB(:, :, :, frameIdx) = flowMapImg(v_rescaled(:, :, frameIdx), {maskArtery, maskVein, maskAV}, {cmapArtery, cmapVein, cmapAV}, background = M0_ff(:, :, frameIdx), circles = circles);
+        v_video_RGB(:, :, :, frameIdx) = flowMapImg( ...
+            v_rescaled(:, :, frameIdx), ...
+            {maskArtery, maskVein, maskAV}, ...
+            {cmapArtery, cmapVein, cmapAV}, ...
+            background = M0_display(:, :, frameIdx), ...
+            circles = circles);
     end
 
 end

@@ -1,4 +1,4 @@
-function [v_video_RGB, v_mean_RGB] = bloodFlowVelocity(v_RMS_video, maskArtery, maskVein, M0_ff, xy_barycenter)
+function [v_video_RGB, v_mean_RGB] = bloodFlowVelocity(v_RMS_video, maskArtery, maskVein, f_video, xy_barycenter)
 
 close all
 ToolBox = getGlobalToolBox;
@@ -7,7 +7,6 @@ exportVideos = params.exportVideos;
 saveFigures = params.saveFigures;
 
 % Rescale once
-M0_ff = rescale(M0_ff);
 [numX, numY, numFrames] = size(v_RMS_video);
 x_c = xy_barycenter(1) / numX;
 y_c = xy_barycenter(2) / numY;
@@ -32,7 +31,7 @@ if saveFigures
     % 1) VELOCITY VIDEO
     tVelocityVideo = tic;
 
-    [v_video_RGB, v_mean_RGB] = flowMap(v_RMS_video, maskSection, maskArtery, maskVein, M0_ff, xy_barycenter, ToolBox);
+    [v_video_RGB, v_mean_RGB] = flowMap(v_RMS_video, f_video, maskSection, maskArtery, maskVein, xy_barycenter, ToolBox);
 
     fprintf("- Velocity Map Timing : %ds\n", round(toc(tVelocityVideo)))
 

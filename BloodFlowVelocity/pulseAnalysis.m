@@ -1,469 +1,928 @@
-function [v_RMS_video, v_video_RGB, v_mean_RGB] = pulseAnalysis(f_video, M0_ff)
-% pulseAnalysis.m computes the flow velocities from Doppler data
-% Inputs:
-%       VIDEOS:
-%   f_video         Size: numX x numY x numFrames double (Doppler Data)
-%   M0_ff     Size: numX x numY x numFrames double (Display Data)
-%       IMAGES:
-%   maskArtery      Size: numX x numY logical
-%   maskBackground  Size: numX x numY logical
-%   maskVein        Size: numX x numY logical
-%   xy_barycenter   Size: 1 x 2 double
+function [v_RMS_video, v_video_RGB, v_mean_RGB] = ...
+    pulseAnalysis(f_video, estimatorName)
+% pulseAnalysis
+% Background-corrected frequency-width analysis.
 %
-% Output:
-%   v_RMS_video     Size: numX x numY x numFrames double
+% Inputs:
+%   f_video:
+%       X x Y x T frequency-estimator cube.
+%
+%   estimatorName:
+%       "f_RMS" or "gaussian_w".
+%       Defaults to "f_RMS" for existing two-input calls.
+%
+% Required Gaussian-width parameter:
+%   PulseAnalysis.GaussianWToRMSKHz
+%       Positive factor converting exported gaussian_w to the
+%       RMS-equivalent frequency convention in kHz.
+%
+% DifferenceMethods:
+%   0: signed quadratic difference
+%   1: nonnegative quadratic difference
+%   2: direct signed difference
+%
+% Output names and velocity conversion are retained for compatibility.
+% Gaussian-derived velocities remain experimental until validated.
 
-tic
+%% 0) Input validation and parameters
 
-% Initial Setup
+if nargin < 3
+    estimatorName = "f_RMS";
+end
+
+estimatorName = string(estimatorName);
+
+if ~isscalar(estimatorName) || ismissing(estimatorName) || ...
+        ~any(estimatorName == ["f_RMS", "gaussian_w"])
+    error('pulseAnalysis:InvalidEstimator', ...
+    'estimatorName must be "f_RMS" or "gaussian_w".');
+end
+
+if ~isnumeric(f_video) || isempty(f_video) || ndims(f_video) > 3
+    error('pulseAnalysis:InvalidInputCube', ...
+    'f_video must be a nonempty numeric X x Y x T cube.');
+end
+
+if ~isreal(f_video) || any(~isfinite(f_video), 'all')
+    error('pulseAnalysis:InvalidFrequencyInput', ...
+        ['f_video contains complex or nonfinite values. ', ...
+     'Handle invalid estimates before pulseAnalysis.']);
+end
+
 ToolBox = getGlobalToolBox;
 params = ToolBox.getParams;
 
-% Parameters
-exportVideos = params.exportVideos;
 jsonParams = params.json;
+pulseParams = jsonParams.PulseAnalysis;
+
+exportVideos = params.exportVideos;
 saveFigures = jsonParams.saveFigures;
-filterSignals = jsonParams.PulseAnalysis.FilterSignals;
-method = jsonParams.PulseAnalysis.DifferenceMethods;
-bkgfillmethod = jsonParams.PulseAnalysis.BkgFillMethod;
-w = jsonParams.PulseAnalysis.LocalBackgroundWidth;
-d = jsonParams.PulseAnalysis.LocalBackgroundDist;
+filterSignals = pulseParams.FilterSignals;
+
+method = pulseParams.DifferenceMethods;
+bkgfillmethod = string(pulseParams.BkgFillMethod);
+
+w = pulseParams.LocalBackgroundWidth;
+d = pulseParams.LocalBackgroundDist;
 k = jsonParams.Preprocess.InterpolationFactor;
-bkg_scaler = jsonParams.PulseAnalysis.bkgScaler;
-scalingFactor = 1000 * 1000 * jsonParams.PulseAnalysis.CorrectionCoeff * ...
-    2 * jsonParams.PulseAnalysis.Lambda / jsonParams.PulseAnalysis.Phi;
+bkg_scaler = pulseParams.bkgScaler;
+
 r1 = jsonParams.SizeOfField.SmallRadiusRatio;
 r2 = jsonParams.SizeOfField.BigRadiusRatio;
 
-% Load cached data
-maskArtery = ToolBox.Cache.maskArtery;
-maskVein = ToolBox.Cache.maskVein;
-maskVessel = ToolBox.Cache.maskVessel;
-% maskChoroid = ToolBox.Cache.maskChoroid;
-maskNeighbors = ToolBox.Cache.maskNeighbors;
-xy_barycenter = ToolBox.Cache.xy_barycenter;
-
-% Validating inputs
-if ~any(maskArtery)
-    error("Given Mask Artery is empty.")
+if ~isnumeric(method) || ~isscalar(method) || ...
+        ~isreal(method) || ~isfinite(method) || ...
+        ~ismember(method, [0 1 2])
+    error('pulseAnalysis:InvalidDifferenceMethod', ...
+    'DifferenceMethods must be 0, 1 or 2.');
 end
 
-% Video dimensions
+switch estimatorName
+    case "f_RMS"
+        frequencyLabel = 'RMS frequency (kHz)';
+        differenceLabel = 'Corrected RMS frequency (kHz)';
+
+    case "gaussian_w"
+
+        if ~isfield(pulseParams, 'GaussianWToRMSKHz')
+            error('pulseAnalysis:MissingGaussianWConversion', ...
+                ['Define PulseAnalysis.GaussianWToRMSKHz from ', ...
+                 'the fitted profile definition and exported units. ', ...
+             'No automatic conversion is assumed.']);
+        end
+
+        widthScale = pulseParams.GaussianWToRMSKHz;
+
+        if ~isnumeric(widthScale) || ...
+                ~isscalar(widthScale) || ...
+                ~isreal(widthScale) || ...
+                ~isfinite(widthScale) || widthScale <= 0
+            error('pulseAnalysis:InvalidGaussianWConversion', ...
+            'GaussianWToRMSKHz must be a finite positive scalar.');
+        end
+
+        f_video(f_video < 0) = 0;
+
+        if any(f_video < 0, 'all')
+            error('pulseAnalysis:NegativeGaussianWidth', ...
+                ['gaussian_w contains negative widths. ', ...
+             'Check fit validity before analysis.']);
+        end
+
+        f_video = single(f_video) .* single(widthScale);
+
+        if any(~isfinite(f_video), 'all')
+            error('pulseAnalysis:InvalidConvertedWidth', ...
+            'Gaussian-width conversion produced nonfinite values.');
+        end
+
+        frequencyLabel = 'Gaussian-derived width (kHz)';
+        differenceLabel = 'Corrected Gaussian-derived width (kHz)';
+
+        warning('pulseAnalysis:ExperimentalGaussianVelocity', ...
+            ['Using gaussian_w with the existing velocity conversion. ', ...
+             'Treat velocities as experimental until the ', ...
+         'width-to-velocity relationship is validated.']);
+end
+
+scalingFactor = 1000 * 1000 * pulseParams.CorrectionCoeff * ...
+    2 * pulseParams.Lambda / pulseParams.Phi;
+
+if ~isscalar(scalingFactor) || ~isreal(scalingFactor) || ...
+        ~isfinite(scalingFactor) || scalingFactor <= 0
+    error('pulseAnalysis:InvalidScalingFactor', ...
+    'The velocity scaling factor must be finite and positive.');
+end
+
 [numX, numY, numFrames] = size(f_video);
+
 dt = ToolBox.stride / ToolBox.fs / 1000;
+
+if ~isscalar(dt) || ~isfinite(dt) || dt <= 0
+    error('pulseAnalysis:InvalidTimeStep', ...
+    'The temporal sampling interval must be finite and positive.');
+end
+
 fs = 1 / dt;
 
-% Create section mask
+t = ToolBox.Cache.t;
+t = t(:).';
+
+if numel(t) ~= numFrames || any(~isfinite(t))
+    error('pulseAnalysis:TimeVectorMismatch', ...
+        ['Cache.t must contain one finite time value per frame. ', ...
+     'Time values: %d; frames: %d.'], ...
+        numel(t), numFrames);
+end
+
+if numFrames > 1 && any(diff(t) <= 0)
+    error('pulseAnalysis:InvalidTimeVector', ...
+    'Cache.t must be strictly increasing.');
+end
+
+fprintf('    - Pulse analysis estimator: %s\n', ...
+    char(estimatorName));
+
+fprintf('    - Background difference method: %d\n', method);
+
+%% Masks and analysis section
+
+maskArtery = logical(ToolBox.Cache.maskArtery);
+maskVein = logical(ToolBox.Cache.maskVein);
+maskVessel = logical(ToolBox.Cache.maskVessel);
+maskNeighbors = logical(ToolBox.Cache.maskNeighbors);
+
+maskList = {maskArtery, maskVein, maskVessel, maskNeighbors};
+maskNames = {'maskArtery', 'maskVein', 'maskVessel', 'maskNeighbors'};
+
+for i = 1:numel(maskList)
+
+    if ~isequal(size(maskList{i}), [numX numY])
+        error('pulseAnalysis:MaskSizeMismatch', ...
+            '%s must have size [%d %d].', ...
+            maskNames{i}, numX, numY);
+    end
+
+end
+
+if ~any(maskArtery, 'all')
+    error('pulseAnalysis:EmptyArteryMask', ...
+    'Given artery mask is empty.');
+end
+
+xy_barycenter = ToolBox.Cache.xy_barycenter;
+
+if numel(xy_barycenter) ~= 2 || ...
+        any(~isfinite(xy_barycenter))
+    error('pulseAnalysis:InvalidBarycenter', ...
+    'xy_barycenter must contain two finite coordinates.');
+end
+
+% Preserve the coordinate convention of the existing pipeline.
 x_c = xy_barycenter(1) / numX;
 y_c = xy_barycenter(2) / numY;
-maskSection = diskMask(numX, numY, r1, r2, 'center', [x_c, y_c]);
 
-% Create vessel masks
+maskSection = logical(diskMask( ...
+    numX, numY, r1, r2, 'center', [x_c y_c]));
+
 maskArterySection = maskArtery & maskSection;
 maskVeinSection = maskVein & maskSection;
-maskVesselSection = (maskVein | maskArtery) & maskSection;
+maskVesselSection = (maskArtery | maskVein) & maskSection;
 
-% Validating inputs
-if ~any(maskArterySection)
-    error("Given Mask Artery has no part within the current section.")
+if ~any(maskArterySection, 'all')
+    error('pulseAnalysis:EmptyArterySection', ...
+    'No artery lies within the current analysis section.');
 end
 
-if ~any(maskVesselSection)
-    error("Given Mask Vein has no part within the current section.")
+if ~any(maskVeinSection, 'all')
+    error('pulseAnalysis:EmptyVeinSection', ...
+        ['No vein lies within the current analysis section. ', ...
+     'This implementation requires arterial and venous signals.']);
 end
 
-% Section 1: Background Calculation
+cBlack = [0 0 0];
+cArtery = [255 22 18] / 255;
+cVein = [18 23 255] / 255;
 
-% Calculate background
-% Background is divided between vascular and non-vascular areas
+%% 1) Background calculation
+
+backgroundTimer = tic;
+
 fprintf("  1. Calculating background...\n");
 
 f_bkg = zeros(numX, numY, numFrames, 'like', f_video);
 
 switch bkgfillmethod
-    case 'maskedAverage'
+    case "maskedAverage"
 
-        parfor frameIdx = 1:numFrames
-            f_bkg(:, :, frameIdx) = single(maskedAverage(f_video(:, :, frameIdx), bkg_scaler * w * 2 ^ k, maskNeighbors, maskVessel));
+        if ~any(maskNeighbors, 'all')
+            error('pulseAnalysis:EmptyNeighborMask', ...
+            'maskedAverage requires a nonempty neighbor mask.');
         end
 
-    case 'inpaintCoherent'
-        maskVesselDilated = imdilate(maskVessel, strel('disk', (d)));
+        backgroundWindow = bkg_scaler * w * 2 ^ k;
 
         parfor frameIdx = 1:numFrames
-            f_bkg(:, :, frameIdx) = single(inpaintCoherent(f_video(:, :, frameIdx), maskVesselDilated));
+            f_bkg(:, :, frameIdx) = single(maskedAverage( ...
+                f_video(:, :, frameIdx), ...
+                backgroundWindow, ...
+                maskNeighbors, ...
+                maskVessel));
+        end
+
+    case "inpaintCoherent"
+        maskVesselDilated = imdilate( ...
+            maskVessel, strel('disk', d));
+
+        parfor frameIdx = 1:numFrames
+            f_bkg(:, :, frameIdx) = single(inpaintCoherent( ...
+                f_video(:, :, frameIdx), ...
+                maskVesselDilated));
         end
 
     otherwise
-        error("Unknown background fill method: %s", bkgfillmethod);
-
+        error('pulseAnalysis:UnknownBackgroundMethod', ...
+            'Unknown background fill method: %s.', ...
+            char(bkgfillmethod));
 end
 
-% Time vector for plotting
-t = ToolBox.Cache.t;
+if ~isreal(f_bkg) || any(~isfinite(f_bkg), 'all')
+    error('pulseAnalysis:InvalidBackground', ...
+    'The estimated background contains complex or nonfinite values.');
+end
 
-% Calculate and plot artery signals
 if saveFigures
-    % Colors for plotting
-    cBlack = [0 0 0];
-    cArtery = [255 22 18] / 255;
-    cVein = [18 23 255] / 255;
+    f_artery = meanMaskedSignal(f_video, maskArterySection);
+    f_artery_bkg = meanMaskedSignal(f_bkg, maskArterySection);
 
-    % Artery signals
-    f_artery = squeeze(sum(f_video .* maskArterySection, [1, 2]) / nnz(maskArterySection));
-    f_artery_bkg = squeeze(sum(f_bkg .* maskArterySection, [1, 2]) / nnz(maskArterySection));
-    f_vein = squeeze(sum(f_video .* maskVeinSection, [1, 2]) / nnz(maskVeinSection));
-    f_vein_bkg = squeeze(sum(f_bkg .* maskVeinSection, [1, 2]) / nnz(maskVeinSection));
-    f_vessel_bkg = squeeze(sum(f_bkg .* maskVesselSection, [1, 2]) / nnz(maskVesselSection));
+    f_vein = meanMaskedSignal(f_video, maskVeinSection);
+    f_vein_bkg = meanMaskedSignal(f_bkg, maskVeinSection);
+
+    f_vessel_bkg = meanMaskedSignal(f_bkg, maskVesselSection);
 
     graphSignal('f_artery', ...
         t, f_artery, '-', cArtery, ...
         t, f_artery_bkg, '--', cBlack, ...
-        'xlabel', 'Time(s)', 'ylabel', 'frequency (kHz)', ...
+        'xlabel', 'Time(s)', ...
+        'ylabel', frequencyLabel, ...
         'Legend', {'arteries', 'background'});
 
     graphSignal('f_vein', ...
         t, f_vein, '-', cVein, ...
         t, f_vein_bkg, '--', cBlack, ...
-        'xlabel', 'Time(s)', 'ylabel', 'frequency (kHz)', ...
+        'xlabel', 'Time(s)', ...
+        'ylabel', frequencyLabel, ...
         'Legend', {'veins', 'background'});
 
     graphSignal('f_vessel', ...
         t, f_artery, '-', cArtery, ...
         t, f_vein, '-', cVein, ...
         t, f_vessel_bkg, '--', cBlack, ...
-        'xlabel', 'Time(s)', 'ylabel', 'frequency (kHz)', ...
+        'xlabel', 'Time(s)', ...
+        'ylabel', frequencyLabel, ...
         'Legend', {'arteries', 'veins', 'background'});
 
-    LocalBackground_in_vessels = mean(f_bkg, 3);
-    createHeatmap(LocalBackground_in_vessels, 'background in vessels', ...
-        'background RMS frequency (kHz)', fullfile(ToolBox.path_png, sprintf("%s_f_bkg_map.png", ToolBox.folder_name)));
+    createHeatmap( ...
+        mean(f_bkg, 3), ...
+        'Estimated background', ...
+        frequencyLabel, ...
+        fullfile(ToolBox.path_png, ...
+        sprintf('%s_f_bkg_map.png', ToolBox.folder_name)));
 end
 
 if exportVideos
-    f_bkg_rescale = rescale(f_bkg);
-    writeGifOnDisc(imresize(f_bkg_rescale, 0.5), "f_bkg");
+    writeGifOnDisc( ...
+        imresize(rescale(f_bkg), 0.5), ...
+    "f_bkg");
 end
 
-fprintf("    1. Background calculation took %ds\n", round(toc));
+fprintf("    1. Background calculation took %ds\n", ...
+    round(toc(backgroundTimer)));
 
-% Section 2: Difference Calculation and Velocity Computation
+%% 2) Difference calculation and velocity computation
 
-tic;
+velocityTimer = tic;
 
-% Calculate difference based on selected method
 switch method
-    case 0 % SIGNED DIFFERENCE FIRST
-        tmp = f_video .^ 2 - f_bkg .^ 2;
-        df = sign(tmp) .* sqrt(abs(tmp));
-        clear tmp;
-    case 1 % DIFFERENCE FIRST
-        tmp = f_video .^ 2 - f_bkg .^ 2;
-        tmp = tmp .* (tmp > 0);
-        df = sqrt(tmp);
-        clear tmp;
-    otherwise % DIFFERENCE LAST
+    case 0
+        % Signed quadratic difference.
+        deltaSquared = f_video .^ 2 - f_bkg .^ 2;
+        df = sign(deltaSquared) .* sqrt(abs(deltaSquared));
+
+    case 1
+        % Nonnegative quadratic difference.
+        deltaSquared = f_video .^ 2 - f_bkg .^ 2;
+        df = sqrt(max(deltaSquared, 0));
+
+    case 2
+        % Direct signed difference.
         df = f_video - f_bkg;
 end
 
-clear f_bkg
+clear deltaSquared f_bkg
 
-% Process artery signals and detect outliers
-df_artery = df .* maskArterySection;
-df_artery_signal = squeeze(sum(df_artery, [1, 2], 'omitnan') / nnz(maskArterySection))';
-outlier_frames_mask = isoutlier(df_artery_signal, "movmedian", 10);
+if any(~isfinite(df), 'all')
+    error('pulseAnalysis:InvalidDifference', ...
+    'Background subtraction produced nonfinite values.');
+end
 
-% Process vein signals if enabled
-df_vein = df .* maskVeinSection;
-df_vein_signal = squeeze(sum(df_vein, [1, 2], 'omitnan') / nnz(maskVeinSection))';
-outlier_frames_mask = outlier_frames_mask | isoutlier(df_vein_signal, "movmedian", 10);
+% Detect temporal outliers from the two regional signals.
+df_artery_signal = meanMaskedSignal(df, maskArterySection);
+df_vein_signal = meanMaskedSignal(df, maskVeinSection);
 
-% Interpolate outlier frames
-df = interpolateOutlierFrames(df, outlier_frames_mask');
+outlier_frames_mask = ...
+    isoutlier(df_artery_signal, "movmedian", 10) | ...
+    isoutlier(df_vein_signal, "movmedian", 10);
+
+if any(outlier_frames_mask)
+
+    if nnz(~outlier_frames_mask) < 2
+        error('pulseAnalysis:InsufficientValidFrames', ...
+        'Too few valid frames remain for outlier interpolation.');
+    end
+
+    df = interpolateOutlierFrames(df, outlier_frames_mask(:));
+end
+
+if any(~isfinite(df), 'all')
+    error('pulseAnalysis:InvalidInterpolatedDifference', ...
+    'Outlier interpolation produced nonfinite values.');
+end
+
+% Recompute signals after interpolation.
+df_artery_signal = meanMaskedSignal(df, maskArterySection);
+df_vein_signal = meanMaskedSignal(df, maskVeinSection);
 
 if saveFigures
-
     graphSignal('df_vessel', ...
         t, df_artery_signal, '-', cArtery, ...
         t, df_vein_signal, '-', cVein, ...
-        'xlabel', 'Time(s)', 'ylabel', 'frequency (kHz)');
+        'xlabel', 'Time(s)', ...
+        'ylabel', differenceLabel);
 
+    meanDifference = mean(df, 3);
+
+    createHeatmap( ...
+        meanDifference .* maskVesselSection, ...
+        'Corrected frequency in vessels', ...
+        differenceLabel, ...
+        fullfile(ToolBox.path_png, ...
+        sprintf('%s_df_map_vessel.png', ToolBox.folder_name)));
+
+    contextMap = meanDifference .* maskVesselSection + ...
+        (mean(f_video, 3) - mean(f_video, 'all')) .* ...
+        ~maskVesselSection;
+
+    createHeatmap( ...
+        contextMap, ...
+        'Corrected vessels with raw-frequency context', ...
+        differenceLabel, ...
+        fullfile(ToolBox.path_png, ...
+        sprintf('%s_df_map.png', ToolBox.folder_name)));
+
+    velocityIm( ...
+        meanDifference .* maskVesselSection, ...
+        maskArtery | maskVein, ...
+        turbo, ...
+        'df_vessel', ...
+        colorbarOn = true, ...
+        LabelName = 'kHz');
+
+    createHeatmap( ...
+        mean(f_video, 3), ...
+        'Raw frequency estimator', ...
+        frequencyLabel, ...
+        fullfile(ToolBox.path_png, ...
+        sprintf('%s_f_map.png', ToolBox.folder_name)));
 end
 
-% background in vessels
-if saveFigures
-
-    % Delta f in vessels
-    in_vessels = mean(df, 3) .* maskVesselSection;
-    createHeatmap(in_vessels, 'Delta f in vessels', ...
-        'Delta Doppler RMS frequency (kHz)', fullfile(ToolBox.path_png, sprintf("%s_df_map_vessel.png", ToolBox.folder_name)));
-
-    % Delta f
-    in_vessels = mean(df, 3) .* maskVesselSection + (mean(f_video, 3) - mean(f_video, 'all')) .* ~maskVesselSection;
-    createHeatmap(in_vessels, 'Delta f in vessels', ...
-        'Delta Doppler RMS frequency (kHz)', fullfile(ToolBox.path_png, sprintf("%s_df_map.png", ToolBox.folder_name)));
-
-    velocityIm(mean(df, 3) .* maskVesselSection, maskArtery | maskVein, turbo, 'df_vessel', colorbarOn = true, LabelName = 'kHz');
-
-    % Raw RMS frequency map
-    raw_map = squeeze(mean(f_video, 3));
-    createHeatmap(raw_map, 'RMS frequency map RAW', ...
-        'RMS frequency (kHz)', fullfile(ToolBox.path_png, sprintf("%s_f_map.png", ToolBox.folder_name)));
-
-end
-
-% Export videos if enabled
 if exportVideos
-    f_video_rescale = rescale(f_video);
-    writeGifOnDisc(imresize(f_video_rescale, 0.5), "f");
+    writeGifOnDisc( ...
+        imresize(rescale(f_video), 0.5), ...
+    "f");
 end
 
-% Calculate velocity
-v_RMS_video = scalingFactor * df;
-
-% COMMENT
-% v_negative_velocity = v_RMS_video < 0;
-% writeGifOnDisc(v_negative_velocity, "v_negative_velocity", 0.04);
+% Existing conversion retained for comparison with the RMS pipeline.
+v_RMS_video = scalingFactor .* df;
 
 clear df
 
-VelocityStatisticalOutputs(v_RMS_video, maskArtery, maskVein, maskArterySection, maskVeinSection);
+if any(~isfinite(v_RMS_video), 'all')
+    error('pulseAnalysis:InvalidVelocity', ...
+    'Velocity conversion produced nonfinite values.');
+end
 
-% Process artery velocity signals
-v_artery = v_RMS_video .* maskArterySection;
-v_artery(~maskArterySection) = NaN;
-v_artery_signal = squeeze(sum(v_artery, [1, 2], 'omitnan') / nnz(maskArterySection))';
+VelocityStatisticalOutputs( ...
+    v_RMS_video, ...
+    maskArtery, ...
+    maskVein, ...
+    maskArterySection, ...
+    maskVeinSection);
 
-% Process vein velocity signals
-v_vein = v_RMS_video .* maskVeinSection;
-v_vein(~maskVeinSection) = NaN;
-v_vein_signal = squeeze(sum(v_vein, [1, 2], 'omitnan') / nnz(maskVeinSection))';
+v_artery_signal = meanMaskedSignal( ...
+    v_RMS_video, maskArterySection);
 
-% Filter signals
+v_vein_signal = meanMaskedSignal( ...
+    v_RMS_video, maskVeinSection);
+
 if filterSignals
-    [b, a] = butter(4, 15 / (fs / 2), 'low');
+    cutoffHz = 15;
+
+    if cutoffHz >= fs / 2
+        error('pulseAnalysis:InvalidFilterCutoff', ...
+            ['The 15 Hz low-pass filter requires ', ...
+         'a temporal sampling frequency greater than 30 Hz.']);
+    end
+
+    [b, a] = butter(4, cutoffHz / (fs / 2), 'low');
+
+    minimumLength = 3 * (max(numel(a), numel(b)) - 1);
+
+    if numFrames <= minimumLength
+        error('pulseAnalysis:SignalTooShortForFiltering', ...
+            'Filtering requires more than %d frames.', ...
+            minimumLength);
+    end
+
     v_artery_signal = filtfilt(b, a, v_artery_signal);
     v_vein_signal = filtfilt(b, a, v_vein_signal);
-
 end
 
 if saveFigures
-    % Plot velocity signals
     graphSignal('v_vessel', ...
         t, v_artery_signal, '-', cArtery, ...
         t, v_vein_signal, '-', cVein, ...
-        'Title', 'average velocity in arteries and veins', 'xlabel', 'Time(s)', 'ylabel', 'Velocity (mm/s)');
+        'Title', 'Average velocity in arteries and veins', ...
+        'xlabel', 'Time(s)', ...
+        'ylabel', 'Velocity (mm/s)');
 end
 
-ToolBox.Output.add('Time', t, 's', h5path = '/Meta/Time');
-ToolBox.Output.add('ArterialVelocity', v_artery_signal, 'mm/s', h5path = '/Artery/Velocity/VelocitySignal');
-ToolBox.Output.add('VenousVelocity', v_vein_signal, 'mm/s', h5path = '/Vein/Velocity/VelocitySignal');
+ToolBox.Output.add( ...
+    'Time', t, 's', ...
+    h5path = '/Meta/Time');
+
+ToolBox.Output.add( ...
+    'ArterialVelocity', v_artery_signal, 'mm/s', ...
+    h5path = '/Artery/Velocity/VelocitySignal');
+
+ToolBox.Output.add( ...
+    'VenousVelocity', v_vein_signal, 'mm/s', ...
+    h5path = '/Vein/Velocity/VelocitySignal');
 
 ToolBox.Cache.ArterialVelocity = v_artery_signal;
 ToolBox.Cache.VeinVelocity = v_vein_signal;
 
-fprintf("    2. Difference calculation and velocity computation took %ds\n", round(toc));
+fprintf("    2. Difference and velocity computation took %ds\n", ...
+    round(toc(velocityTimer)));
 
-% Section 3: Systole/Diastole Analysis
+%% 3) Systole/diastole analysis
 
-tic;
+cycleTimer = tic;
 
-% Find systole indices
-[sys_idx_list, pulse_artery, sys_max_list, sys_min_list] = find_systole_index(v_artery_signal, 'pulseVein', v_vein_signal);
+[sys_idx_list, pulse_artery, sys_max_list, sys_min_list] = ...
+    find_systole_index( ...
+    v_artery_signal, ...
+    'pulseVein', v_vein_signal);
 
-[M0_Systole_img, M0_Diastole_img, sys_idx, dias_idx] = compute_diasys(v_RMS_video, maskArterySection);
+[M0_Systole_img, M0_Diastole_img, sys_idx, dias_idx] = ...
+    compute_diasys(v_RMS_video, maskArterySection);
 
-ToolBox.Output.add("sysIdxList", sys_idx_list,       h5path = "/Artery/Velocity/SystolicAccelerationPeakIndexes");
-
-% ToolBox.Output.add("M0_ff_img_systole",M0_Systole_img);
-% ToolBox.Output.add("M0_ff_img_diastole",M0_Diastole_img);
-
-if saveFigures
-    v_RMS_img = mean(v_RMS_video, 3, 'omitnan');
-    diasys_diff = M0_Systole_img - M0_Diastole_img;
-    RGBdiasys = labDuoImage(rescale(v_RMS_img), diasys_diff);
-    saveMaskImage(RGBdiasys, 'vessel_21_diasys_diff.png', isStep = true);
-end
-
-% Process heart beat data if enough cycles detected
-if numel(sys_idx_list) >= 2 && numel(sys_max_list) >= 2 && numel(sys_min_list) >= 2
-    heartRates = 60 ./ (diff(sys_idx_list) * dt);
-
-    % Calculate statistics
-    HeartBeat = mean(heartRates);
-    HeartBeatSTE = std(heartRates);
-    TimeToPeakSystole = mean((sys_max_list - sys_idx_list'), "omitnan") * dt;
-    TimeToPeakSystoleSTE = std((sys_max_list - sys_idx_list'), "omitnan") * dt;
-    TimeToMinimumDiastole = mean((sys_min_list - sys_idx_list'), "omitnan") * dt;
-    TimeToMinimumDiastoleSTE = std((sys_min_list - sys_idx_list'), "omitnan") * dt;
-    TimeToPeakSystoleFromMinimumDiastole = abs(TimeToMinimumDiastole) + TimeToPeakSystole;
-    TimeToPeakSystoleFromMinimumDiastoleSTE = (TimeToPeakSystoleSTE + TimeToMinimumDiastoleSTE) / 2;
-
-    % Interpolate full pulse for additional analysis
-    Ninterp = 1000;
-    interpFullPulse = interpSignal(pulse_artery, sys_idx_list, Ninterp);
-    pMax = max(interpFullPulse);
-    pMin = min(interpFullPulse);
-    pRange = pMax - pMin;
-
-    % Find descent time
-    firstIndex = find(interpFullPulse - (pMin + 0.05 * pRange) < 0, 1);
-    TimePeakToDescent = firstIndex / Ninterp * mean(diff(sys_idx_list')) * dt;
-
-    % Store output
-    ToolBox.Output.add('HeartBeat', HeartBeat, 'bpm', HeartBeatSTE, h5path = '/Artery/WaveformAnalysis/HeartBeat');
-    ToolBox.Output.add('SystoleIndices', sys_idx_list, '', h5path = '/Artery/WaveformAnalysis/SystoleIndices');
-    ToolBox.Output.add('ArterySystoleMaxIndices', sys_max_list, '', h5path = '/Artery/WaveformAnalysis/ArterySystoleMaxIndices');
-    ToolBox.Output.add('ArteryDiastoleMinIndices', sys_min_list, '', h5path = '/Artery/WaveformAnalysis/ArteryDiastoleMinIndices');
-    ToolBox.Output.add('ArteryTimeToMaxIncrease', 0, 's', 0, h5path = '/Artery/WaveformAnalysis/ArteryTimeToMaxIncrease');
-    ToolBox.Output.add('ArteryTimeToPeakSystole', TimeToPeakSystole, 's', TimeToPeakSystoleSTE, h5path = '/Artery/WaveformAnalysis/ArteryTimeToPeakSystole');
-    ToolBox.Output.add('ArteryTimeToMinDiastole', TimeToMinimumDiastole, 's', TimeToMinimumDiastoleSTE, h5path = '/Artery/WaveformAnalysis/ArteryTimeToMinDiastole');
-    ToolBox.Output.add('ArteryTimeToPeakSystoleFromDiastole', TimeToPeakSystoleFromMinimumDiastole, 's', TimeToPeakSystoleFromMinimumDiastoleSTE, h5path = '/Artery/WaveformAnalysis/TimeToPeakSystoleFromMinimumDiastole');
-    ToolBox.Output.add('ArteryTimeToDescent', TimePeakToDescent, 's', h5path = '/Artery/WaveformAnalysis/TimeToDescent');
-    ToolBox.Output.add('ArteryTimePeakToDescent', TimePeakToDescent + TimeToPeakSystole, 's', h5path = '/Artery/WaveformAnalysis/TimePeakToDescent');
-
-    % Log detailed results
-    logDetailedResults(ToolBox, HeartBeat, sys_idx_list, sys_max_list, sys_min_list, ...
-        TimeToMinimumDiastole, TimeToPeakSystoleFromMinimumDiastole);
-else
-    warning('There isn''t enough systoles for analysis.');
-end
-
-fprintf("    3. Systole/diastole analysis took %ds\n", round(toc));
-
-% Section 4: Resistivity Index and Waveform Analysis
-tic;
-
-% Calculate resistivity index
-ArterialResistivityIndex(v_artery_signal, sys_idx_list, 'v_artery', ForceFigure = true);
-ArterialResistivityIndex(v_vein_signal, sys_idx_list, 'v_vein', ForceFigure = true);
-
-% Perform waveform analysis
-v_artery_interp = ArterialWaveformAnalysis(v_artery_signal, sys_idx_list, 128, 'v_artery');
-v_vein_interp = VenousWaveformAnalysis(v_vein_signal, sys_idx_list, 128, 'v_vein');
-
-% Correlation analysis
-arterial_venous_correlation(v_artery_signal, -v_vein_signal);
-
-% Delay analysis
-arterial_venous_delay(v_artery_interp, v_vein_interp);
-
-fprintf("    4. Resistivity and waveform analysis took %ds\n", round(toc()));
-
-% Section 5: Visualization and Output Generation
-
-tic;
-
-v_video_RGB = zeros(numX, numY, 3, numFrames, 'uint8');
-v_mean_RGB = zeros(numX, numY, 3, 'uint8');
-
-if saveFigures
-    % Precompute masks for visualization
-    maskAV = maskArtery & maskVein;
-    maskArterySection = maskArtery & maskSection & ~maskAV;
-    maskVeinSection = maskVein & maskSection & ~maskAV;
-
-    % Generate flow maps
-    [v_video_RGB, v_mean_RGB] = flowMap(v_RMS_video, maskSection, maskArtery, maskVein, M0_ff, xy_barycenter);
-
-    % Generate histograms
-    histoVideoArtery = VelocityHistogram(v_RMS_video, maskArterySection, 'artery');
-
-    histoVideoVein = VelocityHistogram(v_RMS_video, maskVeinSection, 'vein');
-
-    % Generate combined visualizations
-    createCombinedVisualizations(v_mean_RGB, histoVideoArtery, histoVideoVein, ...
-        v_video_RGB, numFrames, exportVideos, ToolBox);
-
-end
-
-fprintf("    5. Visualization and output generation took %ds\n", round(toc));
-
-close all
-
-% Save Intermediate Results in cache
+% Cache before downstream analyses.
 ToolBox.Cache.sysIdxList = sys_idx_list;
 ToolBox.Cache.sysIdx = sys_idx;
 ToolBox.Cache.diasIdx = dias_idx;
 
+ToolBox.Output.add( ...
+    "sysIdxList", sys_idx_list, ...
+    h5path = "/Artery/Velocity/SystolicAccelerationPeakIndexes");
+
+if saveFigures
+    v_RMS_img = mean(v_RMS_video, 3, 'omitnan');
+    diasys_diff = M0_Systole_img - M0_Diastole_img;
+
+    RGBdiasys = labDuoImage( ...
+        rescale(v_RMS_img), diasys_diff);
+
+    saveMaskImage( ...
+        RGBdiasys, ...
+        'vessel_21_diasys_diff.png', ...
+        isStep = true);
 end
 
-function logDetailedResults(ToolBox, HeartBeat, sysIdxList, sysMaxList, sysMinList, ...
-    TimeToMinimumDiastole, TimeToPeakSystoleFromMinimumDiastole)
-% Helper function to log detailed results
-fileID = fopen(fullfile(ToolBox.path_txt, strcat(ToolBox.folder_name, '_main_outputs.txt')), 'a');
-fprintf(fileID, 'Heart beat: %f (bpm) \r\n', HeartBeat);
-fprintf(fileID, 'Systole Indices: %s \r\n', strcat('[', sprintf("%d,", sysIdxList), ']'));
-fprintf(fileID, 'Number of Cycles: %d \r\n', numel(sysIdxList) - 1);
-fprintf(fileID, 'Max Systole Indices: %s \r\n', strcat('[', sprintf("%d,", sysMaxList), ']'));
-fprintf(fileID, 'Min Systole Indices: %s \r\n', strcat('[', sprintf("%d,", sysMinList), ']'));
-fprintf(fileID, 'Time diastolic min to systolic max derivative (ms): %f \r\n', -TimeToMinimumDiastole);
-fprintf(fileID, 'Time diastolic min to systolic max (ms): %f \r\n', TimeToPeakSystoleFromMinimumDiastole);
-fclose(fileID);
+hasEnoughCycles = ...
+    numel(sys_idx_list) >= 2 && ...
+    numel(sys_max_list) >= 2 && ...
+    numel(sys_min_list) >= 2;
+
+if hasEnoughCycles
+    heartRates = 60 ./ (diff(sys_idx_list) * dt);
+
+    HeartBeat = mean(heartRates);
+    HeartBeatSTE = std(heartRates);
+
+    % Preserve the existing timing and uncertainty conventions.
+    TimeToPeakSystole = ...
+        mean(sys_max_list - sys_idx_list', 'omitnan') * dt;
+
+    TimeToPeakSystoleSTE = ...
+        std(sys_max_list - sys_idx_list', 'omitnan') * dt;
+
+    TimeToMinimumDiastole = ...
+        mean(sys_min_list - sys_idx_list', 'omitnan') * dt;
+
+    TimeToMinimumDiastoleSTE = ...
+        std(sys_min_list - sys_idx_list', 'omitnan') * dt;
+
+    TimeToPeakSystoleFromMinimumDiastole = ...
+        abs(TimeToMinimumDiastole) + TimeToPeakSystole;
+
+    TimeToPeakSystoleFromMinimumDiastoleSTE = ...
+        (TimeToPeakSystoleSTE + TimeToMinimumDiastoleSTE) / 2;
+
+    Ninterp = 1000;
+
+    interpFullPulse = interpSignal( ...
+        pulse_artery, sys_idx_list, Ninterp);
+
+    pMax = max(interpFullPulse);
+    pMin = min(interpFullPulse);
+    pRange = pMax - pMin;
+
+    firstIndex = find( ...
+        interpFullPulse < pMin + 0.05 * pRange, ...
+        1);
+
+    if isempty(firstIndex)
+        TimePeakToDescent = NaN;
+    else
+        TimePeakToDescent = ...
+            firstIndex / Ninterp * ...
+            mean(diff(sys_idx_list')) * dt;
+    end
+
+    ToolBox.Output.add( ...
+        'HeartBeat', HeartBeat, 'bpm', HeartBeatSTE, ...
+        h5path = '/Artery/WaveformAnalysis/HeartBeat');
+
+    ToolBox.Output.add( ...
+        'SystoleIndices', sys_idx_list, '', ...
+        h5path = '/Artery/WaveformAnalysis/SystoleIndices');
+
+    ToolBox.Output.add( ...
+        'ArterySystoleMaxIndices', sys_max_list, '', ...
+        h5path = '/Artery/WaveformAnalysis/ArterySystoleMaxIndices');
+
+    ToolBox.Output.add( ...
+        'ArteryDiastoleMinIndices', sys_min_list, '', ...
+        h5path = '/Artery/WaveformAnalysis/ArteryDiastoleMinIndices');
+
+    ToolBox.Output.add( ...
+        'ArteryTimeToMaxIncrease', 0, 's', 0, ...
+        h5path = '/Artery/WaveformAnalysis/ArteryTimeToMaxIncrease');
+
+    ToolBox.Output.add( ...
+        'ArteryTimeToPeakSystole', ...
+        TimeToPeakSystole, 's', TimeToPeakSystoleSTE, ...
+        h5path = '/Artery/WaveformAnalysis/ArteryTimeToPeakSystole');
+
+    ToolBox.Output.add( ...
+        'ArteryTimeToMinDiastole', ...
+        TimeToMinimumDiastole, 's', TimeToMinimumDiastoleSTE, ...
+        h5path = '/Artery/WaveformAnalysis/ArteryTimeToMinDiastole');
+
+    ToolBox.Output.add( ...
+        'ArteryTimeToPeakSystoleFromDiastole', ...
+        TimeToPeakSystoleFromMinimumDiastole, 's', ...
+        TimeToPeakSystoleFromMinimumDiastoleSTE, ...
+        h5path = ...
+    '/Artery/WaveformAnalysis/TimeToPeakSystoleFromMinimumDiastole');
+
+    ToolBox.Output.add( ...
+        'ArteryTimeToDescent', TimePeakToDescent, 's', ...
+        h5path = '/Artery/WaveformAnalysis/TimeToDescent');
+
+    ToolBox.Output.add( ...
+        'ArteryTimePeakToDescent', ...
+        TimePeakToDescent + TimeToPeakSystole, 's', ...
+        h5path = '/Artery/WaveformAnalysis/TimePeakToDescent');
+
+    logDetailedResults( ...
+        ToolBox, ...
+        HeartBeat, ...
+        sys_idx_list, ...
+        sys_max_list, ...
+        sys_min_list, ...
+        TimeToMinimumDiastole, ...
+        TimeToPeakSystoleFromMinimumDiastole);
+else
+    warning('pulseAnalysis:InsufficientCycles', ...
+    'Not enough detected cycles for complete waveform analysis.');
+end
+
+fprintf("    3. Systole/diastole analysis took %ds\n", ...
+    round(toc(cycleTimer)));
+
+%% 4) Resistivity and waveform analysis
+
+waveformTimer = tic;
+
+if hasEnoughCycles
+    ArterialResistivityIndex( ...
+        v_artery_signal, ...
+        sys_idx_list, ...
+        'v_artery', ...
+        ForceFigure = true);
+
+    ArterialResistivityIndex( ...
+        v_vein_signal, ...
+        sys_idx_list, ...
+        'v_vein', ...
+        ForceFigure = true);
+
+    v_artery_interp = ArterialWaveformAnalysis( ...
+        v_artery_signal, ...
+        sys_idx_list, ...
+        128, ...
+    'v_artery');
+
+    v_vein_interp = VenousWaveformAnalysis( ...
+        v_vein_signal, ...
+        sys_idx_list, ...
+        128, ...
+    'v_vein');
+
+    arterial_venous_correlation( ...
+        v_artery_signal, -v_vein_signal);
+
+    arterial_venous_delay( ...
+        v_artery_interp, v_vein_interp);
+else
+    fprintf('    - Resistivity and waveform analyses skipped.\n');
+end
+
+fprintf("    4. Resistivity and waveform analysis took %ds\n", ...
+    round(toc(waveformTimer)));
+
+%% 5) Visualization and output generation
+
+visualizationTimer = tic;
+
+v_video_RGB = zeros( ...
+    numX, numY, 3, numFrames, 'uint8');
+
+v_mean_RGB = zeros( ...
+    numX, numY, 3, 'uint8');
+
+if saveFigures
+    maskAV = maskArtery & maskVein;
+
+    maskArterySectionDisplay = ...
+        maskArtery & maskSection & ~maskAV;
+
+    maskVeinSectionDisplay = ...
+        maskVein & maskSection & ~maskAV;
+
+    [v_video_RGB, v_mean_RGB] = flowMap( ...
+        v_RMS_video, ...
+        f_video, ...
+        maskSection, ...
+        maskArtery, ...
+        maskVein, ...
+        xy_barycenter);
+
+    if any(maskArterySectionDisplay, 'all') && ...
+            any(maskVeinSectionDisplay, 'all')
+
+        histoVideoArtery = VelocityHistogram( ...
+            v_RMS_video, ...
+            maskArterySectionDisplay, ...
+        'artery');
+
+        histoVideoVein = VelocityHistogram( ...
+            v_RMS_video, ...
+            maskVeinSectionDisplay, ...
+        'vein');
+
+        createCombinedVisualizations( ...
+            v_mean_RGB, ...
+            histoVideoArtery, ...
+            histoVideoVein, ...
+            v_video_RGB, ...
+            numFrames, ...
+            exportVideos, ...
+            ToolBox);
+    else
+        warning('pulseAnalysis:EmptyExclusiveDisplayMask', ...
+            ['Combined histograms skipped: an arterial or venous ', ...
+         'mask is empty after removing overlaps.']);
+    end
+
+end
+
+fprintf("    5. Visualization and output generation took %ds\n", ...
+    round(toc(visualizationTimer)));
+
+close all
+
+end
+
+function signal = meanMaskedSignal(video, mask)
+% Return a row vector containing the spatial mean inside the mask.
+
+if ~any(mask, 'all')
+    error('pulseAnalysis:EmptySignalMask', ...
+    'Cannot extract a signal from an empty mask.');
+end
+
+numFrames = size(video, 3);
+
+pixels = reshape(video, [], numFrames);
+signal = mean(pixels(mask(:), :), 1);
+
+end
+
+function logDetailedResults( ...
+    ToolBox, HeartBeat, sysIdxList, sysMaxList, sysMinList, ...
+    TimeToMinimumDiastole, ...
+    TimeToPeakSystoleFromMinimumDiastole)
+
+filename = fullfile( ...
+    ToolBox.path_txt, ...
+    [char(ToolBox.folder_name), '_main_outputs.txt']);
+
+fileID = fopen(filename, 'a');
+
+if fileID == -1
+    warning('pulseAnalysis:CannotOpenLog', ...
+        'Cannot open results log: %s', filename);
+    return
+end
+
+cleanupFile = onCleanup(@() fclose(fileID)); %#ok<NASGU>
+
+fprintf(fileID, 'Heart beat: %f (bpm)\r\n', HeartBeat);
+
+fprintf(fileID, 'Systole Indices: %s\r\n', ...
+    mat2str(sysIdxList));
+
+fprintf(fileID, 'Number of Cycles: %d\r\n', ...
+    numel(sysIdxList) - 1);
+
+fprintf(fileID, 'Max Systole Indices: %s\r\n', ...
+    mat2str(sysMaxList));
+
+fprintf(fileID, 'Min Systole Indices: %s\r\n', ...
+    mat2str(sysMinList));
+
+% Timing variables are in seconds; convert explicitly for the log.
+fprintf(fileID, ...
+    'Time diastolic min to systolic max derivative (ms): %f\r\n', ...
+    -1000 * TimeToMinimumDiastole);
+
+fprintf(fileID, ...
+    'Time diastolic min to systolic max (ms): %f\r\n', ...
+    1000 * TimeToPeakSystoleFromMinimumDiastole);
+
 end
 
 function createHeatmap(data, titleStr, cbarStr, filename)
-% Helper function to create a single heatmap
-f = figure("Visible", "off");
+
+f = figure('Visible', 'off');
 f.Position = [1100 485 350 420];
-imagesc(data);
-colormap gray
-title(titleStr);
-fontsize(gca, 12, "points");
-set(gca, 'LineWidth', 2);
-c = colorbar('southoutside');
+
+ax = axes('Parent', f);
+
+imagesc(ax, data);
+colormap(ax, gray);
+title(ax, titleStr);
+
+fontsize(ax, 12, 'points');
+set(ax, 'LineWidth', 2);
+
+c = colorbar(ax, 'southoutside');
 c.Label.String = cbarStr;
 c.Label.FontSize = 12;
-axis off
-axis image
-rangeVals = clim;
+
+axis(ax, 'off');
+axis(ax, 'image');
+
+rangeVals = clim(ax);
+
+[pathstr, name, ext] = fileparts(filename);
+
+if ~isfolder(pathstr)
+    mkdir(pathstr);
+end
 
 imwrite(rescale(data), filename);
 
-% Create colorbar figure
-colorfig = figure("Visible", "off");
+colorfig = figure('Visible', 'off');
 colorfig.Units = 'normalized';
-colormap gray
-cbar = colorbar('north');
-clim(rangeVals);
-set(gca, 'Visible', false);
-set(gca, 'LineWidth', 3);
-cbar.Position = [0.10 0.3 0.81 0.35];
 colorfig.Position(4) = 0.1000;
-fontsize(gca, 15, "points");
-colorTitleHandle = get(cbar, 'Title');
-set(colorTitleHandle, 'String', cbarStr);
 
-[pathstr, name, ext] = fileparts(filename);
-exportgraphics(gca, fullfile(pathstr, strrep(name, '_map', '_colorBar') + ext));
-exportgraphics(gca, fullfile(strrep(pathstr, 'png', 'eps'), strrep(name, '_map', '_colorBar') + ".eps"));
+colorax = axes('Parent', colorfig);
 
-close([f, colorfig]);
+colormap(colorax, gray);
+clim(colorax, rangeVals);
+
+set(colorax, 'Visible', 'off', 'LineWidth', 3);
+
+cbar = colorbar(colorax, 'north');
+cbar.Position = [0.10 0.3 0.81 0.35];
+
+fontsize(colorax, 15, 'points');
+cbar.Title.String = cbarStr;
+
+colorbarName = strrep(name, '_map', '_colorBar');
+
+exportgraphics( ...
+    colorax, ...
+    fullfile(pathstr, [colorbarName, ext]));
+
+epsPath = strrep(pathstr, 'png', 'eps');
+
+if ~isfolder(epsPath)
+    mkdir(epsPath);
 end
 
-function createCombinedVisualizations(v_mean_RGB, histoVideoArtery, histoVideoVein, ...
+exportgraphics( ...
+    colorax, ...
+    fullfile(epsPath, [colorbarName, '.eps']));
+
+close([f colorfig]);
+
+end
+
+function createCombinedVisualizations( ...
+    v_mean_RGB, histoVideoArtery, histoVideoVein, ...
     v_video_RGB, numFrames, exportVideos, ToolBox)
-% Helper function to create combined visualizations
 
-% Determine sizes
-[numX_fig, ~, ~, ~] = size(histoVideoArtery);
+numX_fig = size(histoVideoArtery, 1);
+targetSize = [numX_fig * 2, numX_fig * 2];
 
-% Create averaged visualization
-v_mean_RGB4Gif = rescale(imresize3(v_mean_RGB, [numX_fig * 2 numX_fig * 2 3]));
-combinedImg = cat(2, v_mean_RGB4Gif, cat(1, histoVideoArtery(:, :, :, end), histoVideoVein(:, :, :, end)));
+% Resize spatial dimensions without interpolating across RGB channels.
+v_mean_RGB4Gif = rescale(imresize(v_mean_RGB, targetSize));
 
-imwrite(combinedImg, fullfile(ToolBox.path_png, sprintf("%s_%s", ToolBox.folder_name, 'AVGflowVideoCombined.png')));
+combinedImg = cat( ...
+    2, ...
+    v_mean_RGB4Gif, ...
+    cat( ...
+    1, ...
+    histoVideoArtery(:, :, :, end), ...
+    histoVideoVein(:, :, :, end)));
 
-% Create video visualization if exporting
+imwrite( ...
+    combinedImg, ...
+    fullfile( ...
+    ToolBox.path_png, ...
+    sprintf('%s_AVGflowVideoCombined.png', ToolBox.folder_name)));
+
 if exportVideos
+    v_video_RGB4Gif = zeros( ...
+        targetSize(1), targetSize(2), 3, numFrames, ...
+        'like', v_video_RGB);
 
-    v_video_RGB4Gif = zeros(numX_fig * 2, numX_fig * 2, 3, numFrames, 'like', v_video_RGB);
-    v_video_RGB4Gif(:, :, 1, :) = imresize3(squeeze(v_video_RGB(:, :, 1, :)), [numX_fig * 2 numX_fig * 2 numFrames]);
-    v_video_RGB4Gif(:, :, 2, :) = imresize3(squeeze(v_video_RGB(:, :, 2, :)), [numX_fig * 2 numX_fig * 2 numFrames]);
-    v_video_RGB4Gif(:, :, 3, :) = imresize3(squeeze(v_video_RGB(:, :, 3, :)), [numX_fig * 2 numX_fig * 2 numFrames]);
-    combinedGifs = cat(2, v_video_RGB4Gif, cat(1, uint8(rescale(histoVideoArtery, 0, 255)), uint8(rescale(histoVideoVein, 0, 255))));
+    for frameIdx = 1:numFrames
+        v_video_RGB4Gif(:, :, :, frameIdx) = imresize( ...
+            v_video_RGB(:, :, :, frameIdx), ...
+            targetSize);
+    end
 
-    writeGifOnDisc(combinedGifs, "velocityHistogramCombined", 0.04);
+    arteryHistogramRGB = uint8( ...
+        255 .* rescale(histoVideoArtery));
+
+    veinHistogramRGB = uint8( ...
+        255 .* rescale(histoVideoVein));
+
+    combinedGifs = cat( ...
+        2, ...
+        v_video_RGB4Gif, ...
+        cat(1, arteryHistogramRGB, veinHistogramRGB));
+
+    writeGifOnDisc( ...
+        combinedGifs, ...
+        'velocityHistogramCombined', ...
+        0.04);
 end
 
 end

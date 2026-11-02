@@ -73,6 +73,8 @@
     "Eye Side Classifier Net": true
   },
   "PulseAnalysis": {
+    "FrequencyEstimator": "gaussian_w",
+    "GaussianWToRMSKHz": null,
     "DifferenceMethods": 0,
     "BkgFillMethod": "inpaintCoherent",
     "LocalBackgroundWidth": 5,

@@ -1,12 +1,28 @@
 function A = bandRatioArticleFigures( ...
-    M0_ff, HF_M0, LF_M0, bandRatio, regionMasks, opt)
+    M0, HF_M0, LF_M0, bandRatio, regionMasks, opt)
 % bandRatioArticleFigures
-% Figures et données pour un article sur le Doppler band ratio.
+% Figures et données pour un article sur le ratio Doppler HF/M0.
 %
 % INPUTS
-%   M0_ff, HF_M0, LF_M0, bandRatio :
+%   M0, HF_M0, LF_M0, bandRatio :
 %       cubes réels de taille [nRows, nCols, nFrames],
 %       déjà alignés spatialement ET temporellement.
+%
+%       M0 :
+%           moment d'ordre zéro sur la bande Doppler [f1, f2],
+%           sans correction flat-field.
+%
+%       HF_M0 :
+%           moment d'ordre zéro sur la bande haute [fr2, f2],
+%           sans correction flat-field.
+%
+%       LF_M0 :
+%           moment d'ordre zéro sur la bande basse [fr1, fr2].
+%           Conservé pour l'analyse des contributions.
+%
+%       bandRatio :
+%           ratio pixelwise HF_M0 ./ M0 déjà calculé.
+%           Ce cube est utilisé sans correction supplémentaire.
 %
 %   regionMasks :
 %       structure de masques 2D, dans les coordonnées des cubes.
@@ -31,16 +47,19 @@ function A = bandRatioArticleFigures( ...
 %       préfixe des noms de fichiers.
 %
 %   lowBandHz, highBandHz :
-%       métadonnées des bandes, utilisées dans les titres.
+%       métadonnées des bandes LF et HF, utilisées dans les titres.
 %       Elles ne recalculent pas les bandes.
 %
 %   bandValues :
-%       "unknown" : convention non spécifiée.
+%       "unknown"    : convention non spécifiée.
 %       "integrated" : HF/LF sont des puissances intégrées.
-%       "meanPSD" : HF/LF sont des moyennes spectrales par bande.
+%       "meanPSD"    : HF/LF sont des moyennes spectrales par bande.
+%       Métadonnée uniquement : aucune conversion n'est appliquée.
+%       Pour la définition HF_M0/M0 attendue, utiliser des moments
+%       intégrés calculés avec la même convention.
 %
-%   minLF :
-%       seuil strict LF > minLF pour le quotient de contrôle.
+%   minM0 :
+%       seuil strict M0 > minM0 pour le quotient de contrôle.
 %       Ne modifie PAS le bandRatio fourni.
 %
 % OUTPUT
@@ -50,11 +69,12 @@ function A = bandRatioArticleFigures( ...
 %   PNG et PDF des figures, CSV des signaux, MAT des résultats.
 %
 % Important :
-%   mean(HF ./ LF) n'est pas identique à mean(HF) ./ mean(LF).
+%   mean(HF ./ M0) n'est pas identique à mean(HF) ./ mean(M0).
 %   Le bandRatio fourni reste distinct du quotient de contrôle.
+%   LF n'intervient plus au dénominateur du ratio.
 
 arguments
-    M0_ff
+    M0
     HF_M0
     LF_M0
     bandRatio
@@ -69,11 +89,12 @@ arguments
 
     opt.lowBandHz (1, 2) double = [3000 9000]
     opt.highBandHz (1, 2) double = [9000 18000]
+
     opt.bandValues (1, 1) string ...
         {mustBeMember(opt.bandValues, ...
          ["unknown", "integrated", "meanPSD"])} = "unknown"
 
-    opt.minLF (1, 1) double ...
+    opt.minM0 (1, 1) double ...
         {mustBeNonnegative, mustBeFinite} = 0
 
     opt.overlayAlpha (1, 1) double ...
@@ -89,14 +110,14 @@ end
 
 %% Validation
 
-sz = size(M0_ff);
+sz = size(M0);
 
-if isempty(M0_ff) || size(M0_ff, 3) < 2 || ndims(M0_ff) > 3
+if isempty(M0) || size(M0, 3) < 2 || ndims(M0) > 3
     error('bandRatioArticleFigures:invalidVideo', ...
     'Expected a non-empty spatial video with at least two frames.');
 end
 
-inputs = {M0_ff, HF_M0, LF_M0, bandRatio};
+inputs = {M0, HF_M0, LF_M0, bandRatio};
 
 for j = 1:numel(inputs)
     X = inputs{j};
@@ -116,7 +137,7 @@ if any(~isfinite([opt.lowBandHz, opt.highBandHz])) || ...
     'Frequency bands must have finite, increasing, nonnegative bounds.');
 end
 
-[nRows, nCols, nt] = size(M0_ff);
+[nRows, nCols, nt] = size(M0);
 
 if isempty(opt.maskDomain)
     domain = true(nRows, nCols);
@@ -219,7 +240,7 @@ end
 fields = {'M0', 'LF', 'HF', 'BandRatio'};
 
 % Les cubes d'entrée ne sont pas modifiés.
-cubes = {M0_ff, LF_M0, HF_M0, bandRatio};
+cubes = {M0, LF_M0, HF_M0, bandRatio};
 
 A = struct();
 A.time = x;
@@ -235,11 +256,23 @@ end
 A.metadata.lowBandHz = opt.lowBandHz;
 A.metadata.highBandHz = opt.highBandHz;
 A.metadata.bandValues = opt.bandValues;
-A.metadata.minLF = opt.minLF;
+A.metadata.minM0 = opt.minM0;
+
 A.metadata.inputRatio = ...
-    'Supplied bandRatio, without additional correction';
+    'Supplied pixelwise HF_M0 / M0, without additional correction';
+
+A.metadata.ratioDefinition = ...
+    'M0([fr2,f2]) / M0([f1,f2]), using uncorrected spectral moments';
+
+A.metadata.controlRatio = ...
+    'Pixelwise HF_M0 / M0, valid where M0 > minM0';
+
+A.metadata.regionalAggregation = ...
+    'Spatial mean of pixelwise ratios, not ratio of spatial means';
+
 A.metadata.diaphragmNormalization = ...
     'Regional mean divided by instantaneous domain mean';
+
 A.metadata.mapDisplay = ...
     'Independent linear display ranges for each quantity';
 
@@ -284,9 +317,11 @@ for j = 1:numel(fields)
     A.normalized.(field) = normalized;
 end
 
-%% Quotient HF/LF indépendant, sans soustraction d'offset
+%% Quotient HF/M0 indépendant, sans soustraction d'offset
 
 % Ce contrôle n'écrase jamais le bandRatio fourni.
+% Les moyennes spatiales sont calculées après le quotient pixelwise.
+
 quotientRegional = nan(nt, K);
 quotientDomain = nan(nt, 1);
 quotientMap = nan(nRows, nCols, 'single');
@@ -296,13 +331,13 @@ ratioCount = zeros(nRows, nCols, 'double');
 
 for it = 1:nt
     h = double(HF_M0(:, :, it));
-    l = double(LF_M0(:, :, it));
+    m0 = double(M0(:, :, it));
 
-    good = domain & isfinite(h) & isfinite(l) & ...
-        l > opt.minLF;
+    good = domain & isfinite(h) & isfinite(m0) & ...
+        m0 > opt.minM0;
 
     q = nan(nRows, nCols);
-    q(good) = h(good) ./ l(good);
+    q(good) = h(good) ./ m0(good);
 
     % Contrôler également un éventuel dépassement numérique.
     good = good & isfinite(q);
@@ -323,26 +358,9 @@ end
 good = ratioCount > 0;
 quotientMap(good) = single(ratioSum(good) ./ ratioCount(good));
 
-A.quotientHFoverLF.regional = quotientRegional;
-A.quotientHFoverLF.domain = quotientDomain;
-A.quotientHFoverLF.map = quotientMap;
-
-% Conversion optionnelle vers le rapport des densités moyennes.
-if opt.bandValues == "integrated"
-    factor = diff(opt.lowBandHz) / diff(opt.highBandHz);
-elseif opt.bandValues == "meanPSD"
-    factor = 1;
-else
-    factor = NaN;
-end
-
-A.metadata.meanPSDRatioFactor = factor;
-
-if isfinite(factor)
-    A.meanPSDRatio.regional = factor * quotientRegional;
-    A.meanPSDRatio.domain = factor * quotientDomain;
-    A.meanPSDRatio.map = factor * quotientMap;
-end
+A.quotientHFoverM0.regional = quotientRegional;
+A.quotientHFoverM0.domain = quotientDomain;
+A.quotientHFoverM0.map = quotientMap;
 
 %% Figure 1 : quatre cartes
 
@@ -355,8 +373,8 @@ tl = tiledlayout(f, 2, 2, ...
 mapFields = {'M0', 'BandRatio', 'LF', 'HF'};
 
 mapTitles = {
-             '(a) Mean M0 ff'
-             '(b) Mean supplied band ratio'
+             '(a) Mean M0'
+             '(b) Mean supplied HF/M0 ratio'
              sprintf('(c) Mean LF: %.1f-%.1f kHz', opt.lowBandHz / 1000)
              sprintf('(d) Mean HF: %.1f-%.1f kHz', opt.highBandHz / 1000)
              };
@@ -417,7 +435,7 @@ end
 legend(ax, handles, names, ...
     'Interpreter', 'none', 'Location', 'eastoutside');
 
-title(ax, 'Regions on mean M0 ff', 'Interpreter', 'none');
+title(ax, 'Regions on mean M0', 'Interpreter', 'none');
 
 exportFigure(f, outDir, ...
     opt.prefix + "_regions_legend", opt.resolution);
@@ -432,6 +450,7 @@ tl = tiledlayout(f, 4, 1, ...
     'TileSpacing', 'compact', 'Padding', 'compact');
 
 axesList = gobjects(4, 1);
+signalLabels = {'M0', 'LF', 'HF', 'HF/M0'};
 
 for j = 1:4
     ax = nexttile(tl);
@@ -439,8 +458,8 @@ for j = 1:4
 
     plotRegions(ax, x, A.raw.(fields{j}), colors, names);
 
-    ylabel(ax, fields{j}, 'Interpreter', 'none');
-    title(ax, ['Regional mean: ' fields{j}], ...
+    ylabel(ax, signalLabels{j}, 'Interpreter', 'none');
+    title(ax, ['Regional mean: ' signalLabels{j}], ...
         'Interpreter', 'none');
 
     if j == 1
@@ -457,7 +476,7 @@ exportFigure(f, outDir, ...
     opt.prefix + "_regional_signals", opt.resolution);
 clear cleanup
 
-%% Figure 4 : contributions LF/HF/ratio, région par région
+%% Figure 4 : contributions LF/HF/M0 et ratio, région par région
 
 for k = 1:K
     f = newFigure(opt, [100 100 1100 750]);
@@ -471,11 +490,18 @@ for k = 1:K
 
     plot(ax1, x, 100 * A.relative.LF(:, k), ...
         'Color', [0.15 0.45 0.85], ...
-        'LineWidth', 1.3, 'DisplayName', 'LF');
+        'LineWidth', 1.3, ...
+        'DisplayName', 'LF');
 
     plot(ax1, x, 100 * A.relative.HF(:, k), ...
         'Color', [0.90 0.35 0.10], ...
-        'LineWidth', 1.3, 'DisplayName', 'HF');
+        'LineWidth', 1.3, ...
+        'DisplayName', 'HF');
+
+    plot(ax1, x, 100 * A.relative.M0(:, k), ...
+        'Color', [0.20 0.20 0.20], ...
+        'LineWidth', 1.3, ...
+        'DisplayName', 'M0');
 
     ylabel(ax1, 'Change from temporal mean (%)');
     title(ax1, ['Band contributions: ' names{k}], ...
@@ -491,14 +517,14 @@ for k = 1:K
     plot(ax2, x, 100 * A.relative.BandRatio(:, k), ...
         'Color', colors(k, :), ...
         'LineWidth', 1.3, ...
-        'DisplayName', 'Supplied band ratio');
+        'DisplayName', 'Supplied HF/M0 ratio');
 
     qRelative = relativeVariation(quotientRegional(:, k));
 
     plot(ax2, x, 100 * qRelative, '--', ...
         'Color', [0.25 0.25 0.25], ...
         'LineWidth', 1, ...
-        'DisplayName', 'Mean pixelwise HF/LF');
+        'DisplayName', 'Mean pixelwise HF/M0');
 
     ylabel(ax2, 'Change from temporal mean (%)');
     xlabel(ax2, xLabel);
@@ -525,8 +551,8 @@ tl = tiledlayout(f, 3, 1, ...
 
 ax1 = nexttile(tl);
 plotRegions(ax1, x, A.raw.BandRatio, colors, names);
-ylabel(ax1, 'Band ratio');
-title(ax1, 'Regional band ratio before diaphragm normalization');
+ylabel(ax1, 'HF/M0');
+title(ax1, 'Regional HF/M0 before diaphragm normalization');
 
 legend(ax1, 'Interpreter', 'none', ...
     'Location', 'eastoutside');
@@ -537,13 +563,13 @@ plot(ax2, x, A.domainSignals.BandRatio, ...
 grid(ax2, 'on');
 box(ax2, 'on');
 ylabel(ax2, 'Domain mean');
-title(ax2, 'Instantaneous mean band ratio in the diaphragm');
+title(ax2, 'Instantaneous mean HF/M0 in the diaphragm');
 
 ax3 = nexttile(tl);
 plotRegions(ax3, x, A.normalized.BandRatio, colors, names);
 ylabel(ax3, 'Regional / diaphragm');
 xlabel(ax3, xLabel);
-title(ax3, 'Regional band ratio after diaphragm normalization');
+title(ax3, 'Regional HF/M0 after diaphragm normalization');
 
 linkaxes([ax1 ax2 ax3], 'x');
 
@@ -570,8 +596,11 @@ for j = 1:numel(fields)
 
 end
 
+T.Domain_QuotientHFoverM0 = quotientDomain;
+
 for k = 1:K
-    T.(['QuotientHFoverLF_' names{k}]) = quotientRegional(:, k);
+    T.(['QuotientHFoverM0_' names{k}]) = ...
+        quotientRegional(:, k);
 end
 
 file = fullfile(outDir, char(opt.prefix + "_signals.csv"));

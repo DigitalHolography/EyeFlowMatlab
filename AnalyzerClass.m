@@ -136,16 +136,87 @@ methods
         fprintf("\n----------------------------------\n" + ...
             "Blood Flow Velocity Analysis\n" + ...
         "----------------------------------\n");
+
         pulseAnalysisTimer = tic;
 
-        [executionObj.Cache.vRMS, executionObj.Cache.v_video_RGB, executionObj.Cache.v_mean_RGB] = pulseAnalysis(executionObj.Cache.f_RMS, executionObj.Cache.M0_ff);
+        executionObj.is_velocityAnalyzed = false;
 
+        ToolBox = getGlobalToolBox;
+        params = ToolBox.getParams;
+
+        % Default: preserve the original RMS-based analysis.
+        estimatorName = "f_RMS";
+
+        if isfield(params.json.PulseAnalysis, 'FrequencyEstimator')
+            estimatorName = string( ...
+                params.json.PulseAnalysis.FrequencyEstimator);
+        end
+
+        if ~isscalar(estimatorName) || ismissing(estimatorName)
+            error('AnalyzerClass:InvalidFrequencyEstimator', ...
+            'FrequencyEstimator must be a nonmissing scalar string.');
+        end
+
+        switch estimatorName
+            case "f_RMS"
+                f_input = executionObj.Cache.f_RMS;
+
+            case "gaussian_w"
+
+                if ~isprop(executionObj.Cache, 'gaussian_w')
+                    error('AnalyzerClass:MissingGaussianWProperty', ...
+                    'Add gaussian_w single to CacheClass.');
+                end
+
+                f_input = executionObj.Cache.gaussian_w;
+
+            otherwise
+                error('AnalyzerClass:UnknownFrequencyEstimator', ...
+                    ['FrequencyEstimator must be "f_RMS" ', ...
+                 'or "gaussian_w". Received: %s.'], ...
+                    char(estimatorName));
+        end
+
+        if isempty(f_input)
+            error('AnalyzerClass:MissingFrequencyInput', ...
+                'The selected estimator %s is empty.', ...
+                char(estimatorName));
+        end
+
+        if ~isequal(size(f_input), size(executionObj.Cache.M0_ff))
+            error('AnalyzerClass:FrequencyInputSizeMismatch', ...
+                ['The selected estimator and M0_ff must have ', ...
+             'identical sizes. Estimator: %s; M0_ff: %s.'], ...
+                mat2str(size(f_input)), ...
+                mat2str(size(executionObj.Cache.M0_ff)));
+        end
+
+        if ~isreal(f_input) || any(~isfinite(f_input), 'all')
+            error('AnalyzerClass:InvalidFrequencyInput', ...
+                ['The selected estimator contains complex or nonfinite ', ...
+             'values. Handle invalid estimates before analysis.']);
+        end
+
+        fprintf('    - Selected frequency estimator: %s\n', ...
+            char(estimatorName));
+
+        [executionObj.Cache.vRMS, ...
+             executionObj.Cache.v_video_RGB, ...
+             executionObj.Cache.v_mean_RGB] = ...
+            pulseAnalysis( ...
+            f_input, ...
+            estimatorName);
+
+        % Preserve the downstream analyses from the original method.
         perBeatAnalysis();
 
+        % Axial analysis still uses the first-moment estimator.
         axialAnalysis(executionObj.Cache.f_AVG);
 
         executionObj.is_velocityAnalyzed = true;
-        fprintf("- Blood Flow Velocity Analysis took: %ds\n", round(toc(pulseAnalysisTimer)));
+
+        fprintf("- Blood Flow Velocity Analysis took: %ds\n", ...
+            round(toc(pulseAnalysisTimer)));
     end
 
     function performPulseVelocityAnalysis(~, executionObj)
