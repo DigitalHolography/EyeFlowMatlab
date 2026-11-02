@@ -57,13 +57,20 @@ methods
 
     function delete(obj)
         obj.M0 = [];
+       
         obj.M1 = [];
+       
         obj.M2 = [];
+
+       
 
         obj.SH = [];
         obj.SH_avg = [];
 
+        obj.SH_avg = [];
+
         obj.HF_M0 = [];
+       
         obj.LF_M0 = [];
 
         obj.gaussian_w = [];
@@ -75,6 +82,10 @@ methods
         obj.gaussian_w_sourceFile = '';
         obj.gaussian_w_datasetPath = '';
         obj.gaussian_w_info = struct();
+
+        obj.SH_avg_sourceFile = '';
+        obj.SH_avg_datasetPath = '';
+        obj.SH_avg_info = struct();
     end
 
 end
@@ -334,7 +345,7 @@ methods (Access = private)
                 'Cannot open raw file: %s', filepath);
         end
 
-        closeFile = onCleanup(@() fclose(fid)); %#ok<NASGU>
+        closeFile = onCleanup(@() fclose(fid));
 
         data = fread(fid, Inf, '*single');
     end

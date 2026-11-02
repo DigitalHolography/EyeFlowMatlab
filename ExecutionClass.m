@@ -79,7 +79,8 @@ methods
         % DataLoader resolves the input folder automatically.
         DataLoader = DataLoaderClass(dataPath);
 
-        % Keep DataLoader alive until SH_avg has been copied to Cache.
+        % Keep DataLoader alive until SH_avg has been copied to Cache..
+        % Keep DataLoader alive until SH_avg has been copied to the Cache.
         obj.directory = DataLoader.directory;
         obj.filenames = DataLoader.filenames;
 

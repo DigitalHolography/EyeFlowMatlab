@@ -664,11 +664,13 @@ ToolBox.Cache.M0_RGB = M0_RGB;
 ToolBox.Cache.scoreMaskArtery = scoreMaskArtery;
 ToolBox.Cache.scoreMaskVein = scoreMaskVein;
 
-%% 21) Corrélations du band ratio normalisé
+%% 21) Chargement des régions externes
+% Ces régions sont communes aux analyses de bandes et aux spectres SH_avg.
+% Leur chargement ne dépend pas de la disponibilité des données de bandes.
 
 % if ~isempty(ToolBox.Cache.bandRatio) && ...
 %         ~isempty(ToolBox.Cache.f_RMS)
-% 
+%
 %     % Nom du fichier PNG sans extension        Nom simplifié          Couleur
 %     maskDefinitions = {
 %                        'choroidal_aliased_artery_mask_clean', 'ChoroidAliasedArtery', '#ff6600'
@@ -680,38 +682,38 @@ ToolBox.Cache.scoreMaskVein = scoreMaskVein;
 %                        'retinal_vein_mask_clean', 'RetinaVein', '#0080FF'
 %                        'anticor', 'AntiCorrelation', '#1a1818'
 %                        };
-% 
+%
 %     correlationMasks = struct();
 %     correlationColors = struct();
-% 
+%
 %     for k = 1:size(maskDefinitions, 1)
 %         fileName = maskDefinitions{k, 1};
 %         name = maskDefinitions{k, 2};
 %         hexColor = maskDefinitions{k, 3};
-% 
+%
 %         file = findMaskFile( ...
 %             maskFolders, {[fileName '.png']});
-% 
+%
 %         if isempty(file)
 %             warning('createMasks:missingCorrelationMask', ...
 %                 'Correlation mask not found: %s.png', fileName);
 %             continue
 %         end
-% 
+%
 %         m = readMaskFile(file, numX, numY);
 %         m = m & maskDiaphragm;
-% 
+%
 %         if ~any(m, 'all')
 %             warning('createMasks:emptyCorrelationMask', ...
 %                 'Mask %s is empty inside the diaphragm: skipped.', ...
 %                 name);
 %             continue
 %         end
-% 
+%
 %         correlationMasks.(name) = m;
 %         correlationColors.(name) = hexColor;
 %     end
-% 
+%
 %     if isempty(fieldnames(correlationMasks))
 %         warning('createMasks:noCorrelationMask', ...
 %         'No valid external mask: correlation maps skipped.');
@@ -724,7 +726,7 @@ ToolBox.Cache.scoreMaskVein = scoreMaskVein;
 %             maskDomain = maskDiaphragm, ...
 %             regionColors = correlationColors);
 %     end
-% 
+%
 %     articleResults = bandRatioArticleFigures( ...
 %         M0_ff, ...
 %         ToolBox.Cache.HF_M0, ...
@@ -740,20 +742,69 @@ ToolBox.Cache.scoreMaskVein = scoreMaskVein;
 %         lowBandHz = [3000 9000], ...
 %         highBandHz = [9000 18000], ...
 %         bandValues = "unknown");
-% 
+%
 %     % Vérifier que les bandes prétraitées ont été conservées.
 %     if ~isprop(ToolBox.Cache, 'LF_M0') || ...
 %             ~isprop(ToolBox.Cache, 'HF_M0')
-% 
+%
 %         error('createMasks:missingBandCacheProperties', ...
 %             ['Add LF_M0 and HF_M0 to CacheClass, then copy the ', ...
 %          'preprocessed bands into the Cache in ExecutionClass.']);
 %     end
-% 
+%
 % else
 %     warning('createMasks:missingBandRatioData', ...
 %     'Band ratio or f_RMS not available: correlation maps skipped.');
 % end
+
+%% Analyse spectrale régionale de SH_avg
+
+if ~isempty(ToolBox.Cache.SH_avg)
+
+    % Convention explicite :
+    % SH_avg contient la FFT complète, non fftshiftée.
+    numFreq = size(ToolBox.Cache.SH_avg, 3);
+    fsHz = double(ToolBox.fs) * 1000;
+
+    if ~isscalar(fsHz) || ~isfinite(fsHz) || fsHz <= 0
+        error('createMasks:invalidSamplingFrequency', ...
+            ['ToolBox.fs must be a finite positive ', ...
+         'sampling frequency in kHz.']);
+    end
+
+    if numFreq < 2
+        error('createMasks:invalidSpectralSize', ...
+        'SH_avg must contain at least two frequency bins.');
+    end
+
+    frequencyBins = (0:numFreq - 1).';
+
+    negativeBins = frequencyBins >= ceil(numFreq / 2);
+    frequencyBins(negativeBins) = ...
+        frequencyBins(negativeBins) - numFreq;
+
+    frequencyHz = frequencyBins * (fsHz / numFreq);
+
+    fprintf('    - SH_avg: %d spectral bins, fs = %.3f kHz\n', ...
+        numFreq, fsHz / 1000);
+
+    spectralResults = spectrum_masks( ...
+        ToolBox.Cache.SH_avg, ...
+        spectralMasks, ...
+        frequency = frequencyHz, ...
+        frequencyUnit = "Hz", ...
+        maskDomain = maskDiaphragm, ...
+        regionColors = spectralColors, ...
+        referenceImage = M0_ff_img, ...
+        outputDir = fullfile( ...
+        ToolBox.path_png, 'mask', 'spectral_analysis'), ...
+        prefix = string(ToolBox.folder_name) + "_SH_avg", ...
+        sourceFile = string(ToolBox.Cache.SH_avg_sourceFile), ...
+        datasetPath = string(ToolBox.Cache.SH_avg_datasetPath));
+
+else
+    fprintf('    - SH_avg absent: spectral figures skipped\n');
+end
 
 % Libérer les cubes temporaires après
 close all
@@ -798,4 +849,3 @@ end
 m = logical(m);
 
 end
-
