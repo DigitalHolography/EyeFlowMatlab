@@ -226,33 +226,62 @@ methods (Access = private)
     end
 
     function hdPath = resolveHDFolder(~, selectedPath)
-        % Given a folder or .holo file, return the _HD subfolder path.
-        % Returns empty if no appropriate _HD folder can be found.
+        % Accept a direct HD folder, its measurement parent, or a .holo file.
+        % For automatic resolution, prefer MATLAB over legacy/Python exports.
         hdPath = '';
+        selectedPath = char(selectedPath);
+
+        % Remove trailing separators without damaging filesystem roots.
+        while numel(selectedPath) > 1 && ...
+                any(selectedPath(end) == ['/' char(92)])
+
+            if ispc && numel(selectedPath) == 3 && selectedPath(2) == ':'
+                break;
+            end
+
+            selectedPath(end) = [];
+        end
 
         if isfolder(selectedPath)
-            % If it's already an _HD folder, use it directly
-            [~, fname] = fileparts(selectedPath);
+            [~, name] = fileparts(selectedPath);
 
-            if endsWith(fname, '_HD')
+            % Respect an explicitly selected export.
+            if ~isempty(regexpi(name, '_HD(?:_MATLAB)?(?:_\d+)?$', 'once'))
                 hdPath = selectedPath;
-            else
-                % Assume it's the parent folder; look for fname_HD inside
-                candidate = fullfile(selectedPath, [fname, '_HD']);
+                return;
+            end
+
+            roots = {selectedPath};
+
+        elseif isfile(selectedPath)
+            [parentDir, name, extension] = fileparts(selectedPath);
+
+            if ~strcmpi(extension, '.holo')
+                return;
+            end
+
+            % Current nested layout, then legacy sibling layout.
+            roots = {
+                     fullfile(parentDir, name)
+                     parentDir
+                     };
+
+        else
+            return;
+        end
+
+        suffixes = {'_HD_MATLAB', '_HD'};
+
+        for s = 1:numel(suffixes)
+
+            for r = 1:numel(roots)
+                candidate = fullfile(roots{r}, [name suffixes{s}]);
 
                 if isfolder(candidate)
                     hdPath = candidate;
+                    return;
                 end
 
-            end
-
-        elseif isfile(selectedPath)
-            % It's a .holo file; look in its parent folder for <basename>_HD
-            [pDir, fname] = fileparts(selectedPath);
-            candidate = fullfile(pDir, [fname, '_HD']);
-
-            if isfolder(candidate)
-                hdPath = candidate;
             end
 
         end
@@ -278,10 +307,11 @@ methods (Access = private)
 
         for i = 1:length(d)
             folderName = d(i).name; % e.g. '260113_FIY0713_3'
-            hdCandidate = fullfile(superFolder, folderName, [folderName, '_HD']);
+            hdCandidate = obj.resolveHDFolder( ...
+                fullfile(superFolder, folderName));
 
-            if isfolder(hdCandidate)
-                app.drawer_list{end + 1} = hdCandidate; % <-- add the _HD folder itself
+            if ~isempty(hdCandidate) && isfolder(hdCandidate)
+                app.drawer_list{end + 1} = hdCandidate;
                 added = added + 1;
             end
 

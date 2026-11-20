@@ -80,26 +80,33 @@ methods (Access = private)
     end
 
     function extractDataNameAndEFPath(obj)
-        % HD_path is always the _HD folder (e.g., ...\XXX_HD\)
-        cleanPath = strtrim(obj.HD_path);
+        cleanPath = strtrim(char(obj.HD_path));
 
-        if endsWith(cleanPath, filesep)
-            cleanPath = cleanPath(1:end - 1);
+        % Remove trailing separators, preserving filesystem roots.
+        while numel(cleanPath) > 1 && ...
+                any(cleanPath(end) == ['/' char(92)])
+
+            if ispc && numel(cleanPath) == 3 && cleanPath(2) == ':'
+                break;
+            end
+
+            cleanPath(end) = [];
         end
 
         [parentDir, folderName] = fileparts(cleanPath);
 
-        % Remove trailing _HD or _HD_XX
-        baseName = regexprep(folderName, '_HD(_\d+)?$', '', 'ignorecase');
-        % Also clean if already _EF (unlikely)
-        baseName = regexprep(baseName, '_EF(_\d+)?$', '', 'ignorecase');
+        % Accept legacy and MATLAB input/output suffixes.
+        % Examples: _HD, _HD_0, _HD_MATLAB, _EF, _EF_MATLAB.
+        baseName = regexprep(folderName, ...
+            '_(?:HD|EF)(?:_MATLAB)?(?:_\d+)?$', ...
+            '', 'ignorecase');
 
         obj.data_name = baseName;
-        obj.EF_path = fullfile(parentDir, [baseName, '_EF'], filesep);
+        obj.EF_path = fullfile(parentDir, [baseName '_EF_MATLAB']);
     end
 
     function initializePaths(obj)
-        obj.folder_name = [obj.data_name, '_EF'];
+        obj.folder_name = [obj.data_name, '_EF_MATLAB'];
 
         obj.path_png = fullfile(obj.EF_path, 'png');
         obj.path_eps = fullfile(obj.EF_path, 'eps');
@@ -128,6 +135,83 @@ methods (Access = private)
     end
 
     function loadParameters(obj)
+
+        % Current HoloDopplerMatlab export.
+        matlabJson = fullfile(obj.HD_path, 'json', 'parameters.json');
+
+        if isfile(matlabJson)
+            fprintf('Reading parameters from: %s\n', matlabJson);
+            data = jsondecode(fileread(matlabJson));
+
+            if isfield(data, 'batchStride')
+                stride = double(data.batchStride);
+            elseif isfield(data, 'batch_stride')
+                stride = double(data.batch_stride);
+            else
+                error('ToolBoxClass:MissingBatchStride', ...
+                    'Missing batchStride/batch_stride in %s.', matlabJson);
+            end
+
+            % EyeFlow stores fs in kHz; sampling_freq is exported in Hz.
+            if isfield(data, 'sampling_freq')
+                fsKHz = double(data.sampling_freq) / 1000;
+            elseif isfield(data, 'fs')
+                fsKHz = double(data.fs);
+            else
+                error('ToolBoxClass:MissingSamplingFrequency', ...
+                    'Missing sampling_freq/fs in %s.', matlabJson);
+            end
+
+            if isfield(data, 'frequencyRange1') && ...
+                    isfield(data, 'frequencyRange2')
+                frequencyRange = double([ ...
+                                             data.frequencyRange1, data.frequencyRange2]);
+
+            elseif isfield(data, 'time_range') && numel(data.time_range) == 2
+                frequencyRange = double(data.time_range(:).');
+
+            else
+                error('ToolBoxClass:MissingFrequencyRange', ...
+                    'Missing frequency range in %s.', matlabJson);
+            end
+
+            validateattributes(stride, {'double'}, ...
+                {'scalar', 'finite', 'integer', 'positive'});
+
+            validateattributes(fsKHz, {'double'}, ...
+                {'scalar', 'finite', 'positive'});
+
+            validateattributes(frequencyRange, {'double'}, ...
+                {'vector', 'numel', 2, 'finite', 'nonnegative'});
+
+            if frequencyRange(2) < frequencyRange(1)
+                error('ToolBoxClass:InvalidFrequencyRange', ...
+                    'Upper frequency bound is below the lower bound in %s.', ...
+                    matlabJson);
+            end
+
+            obj.stride = stride;
+            obj.fs = fsKHz;
+            obj.f1 = frequencyRange(1);
+            obj.f2 = frequencyRange(2);
+
+            if isfield(data, 'record_time_stamps_us')
+                obj.record_time_stamps_us = data.record_time_stamps_us;
+            end
+
+            if isfield(data, 'first_frame')
+                obj.holo_frames.first = data.first_frame;
+            end
+
+            if isfield(data, 'end_frame')
+                obj.holo_frames.last = data.end_frame;
+            elseif isfield(data, 'num_frames')
+                obj.holo_frames.last = data.num_frames;
+            end
+
+            return;
+        end
+
         % Try RenderingParameters*.json
         fname = obj.getFirstFileMatch(obj.HD_path, '*RenderingParameters*.json');
 
@@ -179,6 +263,7 @@ methods (Access = private)
                 if isfield(data, 'end_frame')
                     obj.holo_frames.last = data.end_frame;
                 end
+
             end
 
             return;

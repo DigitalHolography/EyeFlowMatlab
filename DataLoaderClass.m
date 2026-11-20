@@ -57,12 +57,10 @@ methods
 
     function delete(obj)
         obj.M0 = [];
-       
-        obj.M1 = [];
-       
-        obj.M2 = [];
 
-       
+        obj.M1 = [];
+
+        obj.M2 = [];
 
         obj.SH = [];
         obj.SH_avg = [];
@@ -70,7 +68,7 @@ methods
         obj.SH_avg = [];
 
         obj.HF_M0 = [];
-       
+
         obj.LF_M0 = [];
 
         obj.gaussian_w = [];
@@ -121,7 +119,10 @@ methods (Access = private)
             return
         end
 
-        hdDirs = dir(fullfile(startPath, '*_HD'));
+        hdDirs = [
+                  dir(fullfile(startPath, '*_HD_MATLAB'))
+                  dir(fullfile(startPath, '*_HD'))
+                  ];
         hdDirs = hdDirs([hdDirs.isdir]);
 
         for i = 1:numel(hdDirs)

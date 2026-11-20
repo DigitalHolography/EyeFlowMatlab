@@ -566,7 +566,11 @@ methods (Access = private)
             return;
         end
 
-        hdDirs = dir(fullfile(selectedPath, '*_HD'));
+        % Prefer MATLAB exports when both MATLAB and Python outputs exist.
+        hdDirs = [
+                  dir(fullfile(selectedPath, '*_HD_MATLAB'))
+                  dir(fullfile(selectedPath, '*_HD'))
+                  ];
         hdDirs = hdDirs([hdDirs.isdir]);
 
         for i = 1:length(hdDirs)

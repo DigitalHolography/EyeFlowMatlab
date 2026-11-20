@@ -83,7 +83,16 @@ methods
 
         ToolBox.Cache.pixelSize = pixelSize;
 
-        createMasks(executionObj.Cache.M0_ff, executionObj.AINetworks.VesselSegmentationNet, executionObj.AINetworks.AVSegmentationNet, executionObj.AINetworks.EyeDiaphragmSegmentationNet);
+        % Import first. Only run automatic segmentation if nothing was imported.
+        masksImported = ImportMasks(ToolBox);
+
+        if ~masksImported
+            createMasks( ...
+                executionObj.Cache.M0_ff, ...
+                executionObj.AINetworks.VesselSegmentationNet, ...
+                executionObj.AINetworks.AVSegmentationNet, ...
+                executionObj.AINetworks.EyeDiaphragmSegmentationNet);
+        end
 
         % Artery score
         scoreA = ToolBox.Cache.scoreMaskArtery;

@@ -38,6 +38,10 @@ if ~isfield(params.json, 'Mask')
 end
 
 mask_params = params.json.Mask;
+% Offer existing DopplerView masks for interactive runs.
+% No dialog is opened when no complete pair is found.
+mask_params = chooseDopplerViewMasks( ...
+    mask_params, ToolBox.HD_path, [numX numY]);
 
 diaphragmRadius = mask_params.DiaphragmRadius;
 cropChoroidRadius = mask_params.CropChoroidRadius;
@@ -663,6 +667,11 @@ ToolBox.Cache.M0_RGB = M0_RGB;
 
 ToolBox.Cache.scoreMaskArtery = scoreMaskArtery;
 ToolBox.Cache.scoreMaskVein = scoreMaskVein;
+
+%% Import and measure DopplerView regions
+% Interactive selection: cancel leaves the normal EyeFlow analysis unchanged.
+
+dvResults = importDopplerViewRegions(ToolBox);
 
 %% 21) Chargement des régions externes
 % Ces régions sont communes aux analyses de bandes et aux spectres SH_avg.
